@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="96" fill="#060b1f"/>
+  <g transform="translate(256 232)">
+    <path d="M0-130a130 130 0 0 1 112 65l-38 22a88 88 0 0 0-74-43Z" fill="#f5b301"/>
+    <path d="M130 0a130 130 0 0 1-65 112l-22-38a88 88 0 0 0 43-74Z" fill="#f5b301"/>
+    <path d="M0 130a130 130 0 0 1-112-65l38-22a88 88 0 0 0 74 43Z" fill="#f5b301"/>
+    <path d="M-130 0a130 130 0 0 1 65-112l22 38a88 88 0 0 0-43 74Z" fill="#f5b301"/>
+    <polygon points="112,65 152,52 128,20" fill="#f5b301"/>
+    <polygon points="-112,-65 -152,-52 -128,-20" fill="#f5b301"/>
+    <polygon points="-65,112 -52,152 -20,128" fill="#f5b301"/>
+    <polygon points="65,-112 52,-152 20,-128" fill="#f5b301"/>
+    <text x="0" y="34" font-family="Arial, Helvetica, sans-serif" font-size="120" font-weight="900" fill="#e8eefc" text-anchor="middle">S</text>
+  </g>
+  <g transform="translate(330 356) rotate(-18)">
+    <rect width="150" height="56" rx="12" fill="#dc2626"/>
+    <text x="75" y="40" font-family="Arial, Helvetica, sans-serif" font-size="40" font-weight="900" fill="#ffffff" text-anchor="middle">SIM</text>
+  </g>
+</svg>
