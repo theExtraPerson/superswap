@@ -76,24 +76,24 @@ export function ProductsSection({ desk }: { desk: DeskApi }) {
   return (
     <div className="space-y-4">
       <Card title="Catalogue" hint="Retiring keeps history — open cycles pay from their snapshot, never from this table. Rates are TOTAL over the term.">
-        <ul className="divide-y divide-[#1d2c55] text-sm">
+        <ul className="divide-y divide-[#20304a] text-sm">
           {products.map((p) => (
             <li key={p.slug} className="flex items-center justify-between gap-2 py-2">
               <div>
                 <span className="font-bold">{p.name}</span>
-                <span className="ml-2 text-[#6b7fae]">
+                <span className="ml-2 text-[#92a0b9]">
                   {fmtUGX(p.min_principal)}–{fmtUGX(p.max_principal)} · {p.duration_days}d · +
                   {fmtRate(p.total_rate_pct)} total · exit {fmtRate(p.early_exit_percent)}
                 </span>
-                {!p.active && <span className="ml-2 rounded bg-[#12204a] px-1.5 text-[10px] text-[#6b7fae]">RETIRED</span>}
-                {!p.visible && <span className="ml-2 rounded bg-[#12204a] px-1.5 text-[10px] text-[#6b7fae]">HIDDEN</span>}
+                {!p.active && <span className="ml-2 rounded bg-[#16233d] px-1.5 text-[10px] text-[#92a0b9]">RETIRED</span>}
+                {!p.visible && <span className="ml-2 rounded bg-[#16233d] px-1.5 text-[10px] text-[#92a0b9]">HIDDEN</span>}
               </div>
               <Btn variant="ghost" onClick={() => setActive(p, !p.active)}>
                 {p.active ? "Retire" : "Restore"}
               </Btn>
             </li>
           ))}
-          {products.length === 0 && <li className="py-3 text-[#6b7fae]">No products yet.</li>}
+          {products.length === 0 && <li className="py-3 text-[#92a0b9]">No products yet.</li>}
         </ul>
       </Card>
 

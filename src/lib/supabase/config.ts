@@ -19,10 +19,15 @@ export const CRON_SECRET = env.CRON_SECRET ?? "";
 export const SITE_URL = env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
 
 export const appRulesFallback = {
-  min_deposit: 1000,
+  min_deposit: 10000,
   min_withdrawal: 5000,
-  withdrawal_fee_percent: 1.5,
-  referral_reward: 0,
+  withdrawal_fee_percent: 17,
+  referral_commission_percent: 18,
+  signup_bonus: 1500,
+  checkin_bonus: 100,
+  withdraw_window_from: "09:00",
+  withdraw_window_to: "21:00",
+  timezone: "Africa/Kampala",
   settlement_hour: "22:00",
   lock_at: "19:45",
   platform_paused: false,

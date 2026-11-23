@@ -26,7 +26,44 @@ language sql stable security definer set search_path = public as $$
   select coalesce((select value::boolean from platform_settings where key = p_key), p_default)
 $$;
 
+-- ---------------------------------------------------------------- clock
+-- Member-facing time rules are wall-clock in the platform timezone (Supabase
+-- Postgres runs UTC, so `localtime`/`now()` alone would shift them by 3h for
+-- Uganda). 'now() at time zone X' yields the wall clock inside X.
+create or replace function app_clock() returns time
+language sql stable security definer set search_path = public as $$
+  select (now() at time zone app_setting_text('timezone', 'Africa/Kampala'))::time
+$$;
+
+-- Abbreviation of that zone (EAT, UTC, ...) for human-readable messages.
+-- Read from the tz catalogue: to_char(..., 'TZ') on a wall-clock timestamp
+-- would report the SESSION zone instead, which is never what members are told.
+create or replace function app_clock_label() returns text
+language sql stable security definer set search_path = public as $$
+  select coalesce(
+    (select t.abbrev from pg_timezone_names t
+      where t.name = app_setting_text('timezone', 'Africa/Kampala')
+      order by t.is_dst limit 1),
+    app_setting_text('timezone', 'Africa/Kampala')
+  )
+$$;
+
+-- The platform-timezone calendar day — the unit of the daily check-in.
+create or replace function app_today() returns date
+language sql stable security definer set search_path = public as $$
+  select (now() at time zone app_setting_text('timezone', 'Africa/Kampala'))::date
+$$;
+
+-- Are withdrawal requests accepted at this instant? (window is inclusive)
+create or replace function app_withdrawals_open() returns boolean
+language sql stable security definer set search_path = public as $$
+  select app_clock() between app_setting_time('withdraw_window_from', '09:00')
+                         and app_setting_time('withdraw_window_to', '21:00')
+$$;
+
 -- ---------------------------------------------------------------- gates
+-- Platform pause + the daily books-close lock. The lock keeps its historical
+-- DB-clock semantics; the withdrawal window (below) is the Kampala one.
 create or replace function app_assert_running() returns void
 language plpgsql stable security definer set search_path = public as $$
 declare
@@ -40,6 +77,18 @@ begin
   if localtime between v_lock_from and v_lock_to then
     raise exception 'DAILY_LOCK: Money movement is locked %-% each day while the books close.', v_lock_from, v_lock_to;
   end if;
+end $$;
+
+-- Withdrawal requests alone are confined to the published window, so the
+-- queue the operator works by day matches the desk's opening hours.
+create or replace function app_assert_withdrawal_window() returns void
+language plpgsql stable security definer set search_path = public as $$
+begin
+  if app_withdrawals_open() then return; end if;
+  raise exception 'OUTSIDE_WINDOW: Withdrawals open %–% (%).',
+    app_setting_time('withdraw_window_from', '09:00'),
+    app_setting_time('withdraw_window_to', '21:00'),
+    app_clock_label();
 end $$;
 
 create or replace function app_profile() returns profiles
@@ -117,11 +166,131 @@ begin
   return v_new;
 end $$;
 
+-- ---------------------------------------------------------------- promo credits
+-- Marketing promises (sign-up bonus, L1 referral commission) are operator
+-- spend rather than member cash-in, so — by product decision — they skip the
+-- solvency gate. To keep the published coverage number true, each promo credit
+-- is mirrored into the reserve as a non-cash 'promo_overlay' entry: reserve
+-- and obligations rise by the same amount, coverage does not move, and the
+-- overlay is not free cash (app_admin_draw_reserve measures reserve -
+-- obligations, which the overlay leaves unchanged).
+-- Idempotent on p_idem_key: a promo is never paid twice.
+create or replace function app_promo_credit(
+  p_user uuid, p_amount numeric, p_kind text,
+  p_ref_table text default null, p_ref_id bigint default null,
+  p_note text default null, p_idem_key text default null
+) returns numeric
+language plpgsql security definer set search_path = public as $$
+declare
+  v_reserve numeric;
+begin
+  if coalesce(p_amount, 0) <= 0 then return null; end if;
+  if p_idem_key is not null
+     and exists (select 1 from ledger where idem_key = p_idem_key and kind = p_kind) then
+    return null;                                     -- already granted
+  end if;
+
+  update reserve set balance = balance + p_amount, updated_at = now()
+    where id = 1 returning balance into v_reserve;
+  insert into reserve_entries (amount, kind, balance_after, reference, note, actor_user_id, idem_key)
+  values (p_amount, 'promo_overlay', v_reserve, null,
+          'Overlay for ' || p_kind || coalesce(' (' || p_note || ')', ''),
+          null, case when p_idem_key is null then null else 'overlay:' || p_idem_key end);
+
+  return app_credit(p_user, p_amount, p_kind, p_ref_table, p_ref_id, p_note, p_idem_key);
+end $$;
+
+-- One-time sign-up bonus, claimed by the member's own session: the auth routes
+-- call it right after a successful sign-in, so it lands on first login.
+create or replace function app_claim_signup_bonus() returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare
+  v_me profiles := app_profile();
+  v_amount numeric := app_setting_num('signup_bonus', 1500);
+  v_balance numeric;
+begin
+  if coalesce(v_amount, 0) <= 0 then
+    return jsonb_build_object('credited', 0, 'status', 'disabled',
+                              'wallet_balance', v_me.wallet_balance);
+  end if;
+
+  v_balance := app_promo_credit(v_me.user_id, v_amount, 'bonus_credit', 'profiles', null,
+                                'Welcome bonus', 'signup_bonus:' || v_me.user_id);
+  if v_balance is null then
+    return jsonb_build_object('credited', 0, 'status', 'already_claimed',
+                              'wallet_balance', v_me.wallet_balance);
+  end if;
+  return jsonb_build_object('credited', v_amount, 'status', 'credited',
+                            'wallet_balance', v_balance);
+end $$;
+
+-- Consecutive check-in days ending today (yesterday's run continues until the
+-- current day if today is not claimed yet — the Home tab shows it either way).
+create or replace function app_checkin_streak(p_user uuid) returns int
+language plpgsql stable security definer set search_path = public as $$
+declare
+  v_day date := app_today();
+  v_streak int := 0;
+begin
+  if exists (select 1 from checkin_log where user_id = p_user and day = v_day) then
+    v_streak := 1;
+    v_day := v_day - 1;
+  end if;
+  while exists (select 1 from checkin_log where user_id = p_user and day = v_day) loop
+    v_streak := v_streak + 1;
+    v_day := v_day - 1;
+    if v_streak >= 366 then exit; end if;                    -- hard safety stop
+  end loop;
+  return v_streak;
+end $$;
+
+-- Daily check-in reward: once per platform-timezone day, overlay-funded like
+-- every other promo (coverage-neutral). The (user_id, day) primary key is the
+-- replay guard; the ledger idem key doubles it for money movement.
+create or replace function app_checkin() returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare
+  v_me profiles := app_profile();
+  v_bonus numeric := app_setting_num('checkin_bonus', 100);
+  v_day date := app_today();
+  v_wallet numeric;
+begin
+  if coalesce(v_bonus, 0) <= 0 then
+    return jsonb_build_object('credited', 0, 'status', 'disabled', 'day', v_day,
+                              'streak', 0, 'wallet_balance', v_me.wallet_balance);
+  end if;
+  perform app_assert_running();
+
+  insert into checkin_log (user_id, day, amount) values (v_me.user_id, v_day, v_bonus)
+    on conflict (user_id, day) do nothing;
+  if not found then
+    return jsonb_build_object('credited', 0, 'status', 'already_claimed', 'day', v_day,
+                              'streak', app_checkin_streak(v_me.user_id),
+                              'wallet_balance', v_me.wallet_balance);
+  end if;
+
+  v_wallet := app_promo_credit(v_me.user_id, v_bonus, 'checkin_bonus', 'checkin_log', null,
+                               'Daily check-in', 'checkin:' || v_me.user_id || ':' || v_day);
+  return jsonb_build_object('credited', v_bonus, 'status', 'credited', 'day', v_day,
+                            'streak', app_checkin_streak(v_me.user_id),
+                            'wallet_balance', coalesce(v_wallet, v_me.wallet_balance));
+end $$;
+
 -- ---------------------------------------------------------------- auth helpers (called by API routes)
--- Username -> synthetic email lookup; reveals existence only, nothing else.
+-- Username -> synthetic email. The login handle is the username, so the host
+-- comes from platform_settings.auth_email_domain. A malformed host (unset, or a
+-- reserved TLD such as *.local) makes GoTrue reject the signup with an opaque
+-- 400 that reads as a server fault everywhere downstream — so emit NULL and let
+-- the routes answer AUTH_NOT_CONFIGURED instead of inventing a dead address.
 create or replace function app_auth_email(p_username text) returns text
 language sql stable security definer set search_path = public as $$
-  select lower(trim(p_username)) || '@' || app_setting_text('auth_email_domain', 'accounts.superswap.local')
+  select case
+           when d.domain ~ '^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*\.[a-z]{2,}$'
+                and d.domain !~ '\.(local|localhost|test|example|invalid|onion)$'
+           then lower(trim(p_username)) || '@' || d.domain
+         end
+    from (select lower(trim(coalesce(app_setting_text('auth_email_domain', ''), ''))) as domain) d
+   where lower(trim(coalesce(p_username, ''))) <> ''
 $$;
 
 -- Pre-signup availability check (the real guard is the unique index + trigger).
@@ -150,9 +319,15 @@ begin
     'profile', to_jsonb(v_me) - 'is_banned',
     'is_banned', v_me.is_banned,
     'rules', jsonb_build_object(
-      'min_deposit', app_setting_num('min_deposit', 1000),
+      'min_deposit', app_setting_num('min_deposit', 10000),
       'min_withdrawal', app_setting_num('min_withdrawal', 5000),
-      'withdrawal_fee_percent', app_setting_num('withdrawal_fee_percent', 0),
+      'withdrawal_fee_percent', app_setting_num('withdrawal_fee_percent', 17),
+      'referral_commission_percent', app_setting_num('referral_commission_percent', 18),
+      'signup_bonus', app_setting_num('signup_bonus', 1500),
+      'withdraw_window_from', app_setting_text('withdraw_window_from', '09:00'),
+      'withdraw_window_to', app_setting_text('withdraw_window_to', '21:00'),
+      'timezone', app_setting_text('timezone', 'Africa/Kampala'),
+      'withdrawals_open', app_withdrawals_open(),
       'settlement_hour', app_setting_text('settlement_hour', '22:00'),
       'lock_at', app_setting_text('lock_at', '19:45'),
       'platform_paused', app_setting_bool('platform_paused', false),
@@ -163,6 +338,12 @@ begin
       'reserve_balance', (select balance from reserve where id = 1),
       'obligations', app_obligations(),
       'coverage_pct', app_coverage()
+    ),
+    'checkin', jsonb_build_object(
+      'bonus', app_setting_num('checkin_bonus', 100),
+      'claimed_today', exists (select 1 from checkin_log
+                               where user_id = v_uid and day = app_today()),
+      'streak', app_checkin_streak(v_uid)
     ),
     'products', (select coalesce(jsonb_agg(jsonb_build_object(
         'id', p.id, 'slug', p.slug, 'name', p.name,
@@ -293,8 +474,11 @@ begin
 end $$;
 
 -- ---------------------------------------------------------------- deposits
--- Records the intent + reference; the ledger only moves when an operator
--- confirms receipt of the actual money (app_admin_confirm_deposit).
+-- Records the intent; a momo deposit then rides the Shashura requestToPay
+-- fired by /api/deposits and CREDITS ITSELF when the signed webhook confirms
+-- (app_hook_shashura -> app_deposit_credited_core). Bank/off-platform rows
+-- wait for an operator (app_admin_confirm_deposit) — the fallback, not the
+-- main road.
 create or replace function app_open_deposit(
   p_amount numeric, p_channel text, p_payer_account text,
   p_reference text default null, p_idem_key text default null
@@ -302,7 +486,7 @@ create or replace function app_open_deposit(
 language plpgsql security definer set search_path = public as $$
 declare
   v_me profiles := app_profile();
-  v_min numeric := app_setting_num('min_deposit', 1000);
+  v_min numeric := app_setting_num('min_deposit', 10000);
   v_deposit deposits;
 begin
   perform app_assert_running();
@@ -335,13 +519,14 @@ language plpgsql security definer set search_path = public as $$
 declare
   v_me profiles := app_profile();
   v_min numeric := app_setting_num('min_withdrawal', 5000);
-  v_fee_pct numeric := app_setting_num('withdrawal_fee_percent', 0);
+  v_fee_pct numeric := app_setting_num('withdrawal_fee_percent', 17);
   v_fee numeric(16,2);
   v_idem text := coalesce(p_idem_key, 'wd:' || gen_random_uuid());
   v_existing withdrawals;
   v_row withdrawals;
 begin
   perform app_assert_running();
+  perform app_assert_withdrawal_window();
   if p_amount < v_min then raise exception 'BELOW_MINIMUM: Minimum withdrawal is %.', v_min; end if;
   if p_channel not in ('momo', 'bank') then raise exception 'INVALID_CHANNEL: momo or bank.'; end if;
   if coalesce(trim(p_destination_account), '') = '' then
@@ -370,19 +555,30 @@ begin
   return to_jsonb(v_row);
 end $$;
 
--- ---------------------------------------------------------------- team (attribution only)
+-- ---------------------------------------------------------------- team & commissions
+-- One level only: the direct referrer earns a percent of each deposit their
+-- referee makes (paid inside app_admin_confirm_deposit). No commission on
+-- commissions — an L2 chain is not modelled anywhere, by design.
 create or replace function app_team() returns jsonb
 language plpgsql stable security definer set search_path = public as $$
 declare v_me profiles := app_profile();
 begin
   return jsonb_build_object(
     'referral_code', v_me.referral_code,
-    'reward_amount', app_setting_num('referral_reward', 0),
+    'commission_percent', app_setting_num('referral_commission_percent', 18),
+    'signup_bonus', app_setting_num('signup_bonus', 1500),
     'members', (select coalesce(jsonb_agg(jsonb_build_object(
                      'name', p.display_name, 'joined_at', p.created_at,
                      'first_deposit_at', (select min(settled_at) from deposits d
-                                          where d.user_id = p.user_id and d.status = 'confirmed'))
-                   ) order by p.created_at desc), '[]'::jsonb)
+                                          where d.user_id = p.user_id and d.status = 'confirmed'),
+                     'deposited_total', (select coalesce(sum(amount), 0) from deposits d
+                                         where d.user_id = p.user_id and d.status = 'confirmed'),
+                     'commission_earned', (select coalesce(sum(l.amount), 0) from ledger l
+                                           where l.user_id = v_me.user_id and l.kind = 'referral_reward'
+                                             and l.ref_table = 'deposits'
+                                             and l.ref_id in (select d.id from deposits d
+                                                              where d.user_id = p.user_id)))
+                   order by p.created_at desc), '[]'::jsonb)
       from profiles p where p.referred_by = v_me.user_id),
     'referral_credits', (select coalesce(sum(amount), 0) from ledger
       where user_id = v_me.user_id and kind = 'referral_reward')
@@ -399,9 +595,16 @@ grant execute on function app_username_taken(text) to anon, authenticated;
 grant execute on function app_referral_valid(text) to anon, authenticated;
 grant execute on function app_coverage() to anon;
 grant execute on function app_obligations() to anon;
+grant execute on function app_clock() to anon, authenticated;
+grant execute on function app_clock_label() to anon, authenticated;
+grant execute on function app_withdrawals_open() to anon, authenticated;
 grant execute on function app_assert_running() to authenticated;
+grant execute on function app_assert_withdrawal_window() to authenticated;
 grant execute on function app_profile() to authenticated;
 grant execute on function app_dashboard() to authenticated;
+grant execute on function app_claim_signup_bonus() to authenticated;
+grant execute on function app_today() to anon, authenticated;
+grant execute on function app_checkin() to authenticated;
 grant execute on function app_open_vault(integer, numeric, text) to authenticated;
 grant execute on function app_exit_vault(bigint) to authenticated;
 grant execute on function app_settle_matured() to authenticated, service_role;
@@ -409,6 +612,11 @@ grant execute on function app_open_deposit(numeric, text, text, text, text) to a
 grant execute on function app_open_withdrawal(numeric, text, text, text) to authenticated;
 grant execute on function app_team() to authenticated;
 revoke all on function app_credit, app_debit, app_assert_solvent from public, anon, authenticated;
+-- Promo plumbing is internal: only the definer functions above may grant a promo.
+revoke all on function app_promo_credit(uuid, numeric, text, text, bigint, text, text)
+  from public, anon, authenticated;
+-- Streak maths is internal: the dashboard and app_checkin expose the number.
+revoke all on function app_checkin_streak(uuid) from public, anon, authenticated;
 
 -- ============================================================================
 -- Public marketing reads (no session required)
@@ -417,10 +625,17 @@ create or replace function app_public_info() returns jsonb
 language sql stable security definer set search_path = public as $$
   select jsonb_build_object(
     'rules', jsonb_build_object(
-      'min_deposit', app_setting_num('min_deposit', 1000),
+      'min_deposit', app_setting_num('min_deposit', 10000),
       'min_withdrawal', app_setting_num('min_withdrawal', 5000),
-      'withdrawal_fee_percent', app_setting_num('withdrawal_fee_percent', 0),
+      'withdrawal_fee_percent', app_setting_num('withdrawal_fee_percent', 17),
+      'referral_commission_percent', app_setting_num('referral_commission_percent', 18),
+      'signup_bonus', app_setting_num('signup_bonus', 1500),
+      'withdraw_window_from', app_setting_text('withdraw_window_from', '09:00'),
+      'withdraw_window_to', app_setting_text('withdraw_window_to', '21:00'),
+      'timezone', app_setting_text('timezone', 'Africa/Kampala'),
+      'withdrawals_open', app_withdrawals_open(),
       'settlement_hour', app_setting_text('settlement_hour', '22:00'),
+      'lock_at', app_setting_text('lock_at', '19:45'),
       'platform_paused', app_setting_bool('platform_paused', false)),
     'products', (select coalesce(jsonb_agg(jsonb_build_object(
         'slug', p.slug, 'name', p.name, 'min_principal', p.min_principal,

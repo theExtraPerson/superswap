@@ -6,7 +6,7 @@ import { createClient as createSupabaseClient, type SupabaseClient } from "@supa
 import { SUPABASE_ANON_KEY, SUPABASE_URL } from "@/lib/supabase/config";
 import { createRequestClient } from "@/lib/supabase/server";
 import { mapRpcError } from "./errors";
-import type { ApiError } from "./types";
+import type { ApiError, SignupBonusResult } from "./types";
 
 export function ok<T>(data: T, init?: ResponseInit) {
   return NextResponse.json({ data }, { ...init, status: init?.status ?? 200 });
@@ -48,7 +48,15 @@ export async function callRpc<T>(
   args?: Record<string, unknown>
 ) {
   const { data, error } = await sb.rpc(fn, args ?? {});
-  if (error) return failWith(mapRpcError(error.message));
+  if (error) {
+    // Postgres text is worded for operators and, when it is not a named
+    // 'CODE: detail', mapRpcError collapses it to a causeless 500. Keep the raw
+    // message in the server log so the real fault is recoverable (same [tag]
+    // convention as logAuthFailure); the client still gets the safe envelope.
+    const failure = mapRpcError(error.message);
+    console.error(`[rpc-fail] ${fn} ${failure.code}/${failure.status} :: ${error.message}`);
+    return fail(failure.status, failure.code, failure.message);
+  }
   return ok<T>(data as T);
 }
 
@@ -93,6 +101,33 @@ export async function readJson(req: Request): Promise<Record<string, unknown> | 
     return body && typeof body === "object" && !Array.isArray(body)
       ? (body as Record<string, unknown>)
       : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * GoTrue failures are worded for operators, not members, and a raise inside the
+ * profile-bootstrap trigger arrives wrapped ("Database error saving new user")
+ * with the real reason stripped. Log the raw text under the same [tag] convention
+ * as callRpc so the cause is recoverable from the dev/prod log, then let the
+ * caller pick a friendly envelope.
+ */
+export function logAuthFailure(op: string, error: { message: string; status?: number } | null | undefined) {
+  console.error(`[auth-fail] ${op} ${error?.status ?? ""} ${error?.message ?? ""}`.trim());
+}
+
+/**
+ * The welcome bonus rides a successful sign-in: app_claim_signup_bonus() is
+ * replay-safe in SQL, so calling it on every login is a cheap no-op after the
+ * first credit. It must never fail or delay the auth response, so the result
+ * is best-effort (null on any error).
+ */
+export async function claimSignupBonus(sb: SupabaseClient): Promise<SignupBonusResult | null> {
+  try {
+    const { data, error } = await sb.rpc("app_claim_signup_bonus");
+    if (error || !data) return null;
+    return data as unknown as SignupBonusResult;
   } catch {
     return null;
   }

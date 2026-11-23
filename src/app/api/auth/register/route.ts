@@ -1,5 +1,5 @@
 import { connection } from "next/server";
-import { anonClient, fail, ok, readJson } from "@/lib/api/respond";
+import { anonClient, claimSignupBonus, fail, logAuthFailure, ok, readJson } from "@/lib/api/respond";
 import { mapRpcError } from "@/lib/api/errors";
 import { createRequestClient } from "@/lib/supabase/server";
 import { PHONE_RE, SITE_URL, USERNAME_RE } from "@/lib/supabase/config";
@@ -11,7 +11,9 @@ import type { AuthResult } from "@/lib/api/types";
  * app_auth_email() maps `username` -> `username@auth_email_domain` (synthetic,
  * never displayed). The auth.users insert trigger creates the profile and
  * validates name/phone/referral atomically — this route only pre-checks for
- * friendly errors and carries the cookie session on success.
+ * friendly errors and carries the cookie session on success. When sign-up
+ * returns a session (email confirmation off), the welcome bonus is claimed in
+ * the same round-trip; otherwise it waits for the first sign-in.
  */
 export async function POST(req: Request) {
   await connection(); // per-request under cacheComponents; never prerendered
@@ -46,7 +48,11 @@ export async function POST(req: Request) {
   if (taken) return fail(422, "USERNAME_TAKEN", "That username is already taken.");
 
   const { data: emailData, error: emailErr } = await anon.rpc("app_auth_email", { p_username: username });
-  if (emailErr || !emailData) return failWith(emailErr?.message ?? "email mapping failed");
+  if (emailErr) return failWith(emailErr.message);
+  // NULL means auth_email_domain is unset or not a public hostname. Operator
+  // misconfiguration — say so rather than letting GoTrue reject the address.
+  if (!emailData)
+    return fail(503, "AUTH_NOT_CONFIGURED", "Registration is not configured yet. Please try again shortly.");
 
   // Cookie-backed client: on success @supabase/ssr sets the session cookies,
   // so the browser is signed in without the token ever crossing the JSON body.
@@ -61,11 +67,36 @@ export async function POST(req: Request) {
   });
 
   if (error) {
+    logAuthFailure("signUp", error);
     const msg = error.message.toLowerCase();
+    // GoTrue-side configuration faults — never the member's fault, so answer 503
+    // with the cause named in the log rather than a mystery 500:
+    //  "Email address ... is invalid"  -> auth_email_domain is unset/unusable
+    //  "Email signups are disabled"    -> Email provider off in the dashboard
+    // Tested first because these messages embed the would-be address, and a
+    // handle like "username123" must not fall into the taken-username branch.
+    if (
+      (msg.includes("email address") && msg.includes("invalid")) ||
+      msg.includes("are disabled") ||
+      msg.includes("is disabled")
+    )
+      return fail(503, "AUTH_NOT_CONFIGURED", "Registration is not configured yet. Please try again shortly.");
     if (msg.includes("already registered") || msg.includes("username"))
       return fail(422, "USERNAME_TAKEN", "That username is already taken.");
     if (msg.includes("password"))
       return fail(422, "INVALID_REQUEST", "That password was rejected. Use at least 8 characters.");
+    // A raise inside app_handle_new_user() (or a profile constraint) reaches us
+    // as an opaque 500 from GoTrue; it is always an input problem, so answer 422.
+    if (msg.includes("database error saving new user") || msg.includes("constraint") || msg.includes("trigger"))
+      return fail(
+        422,
+        "SIGNUP_REJECTED",
+        "We could not create that account — please re-check your name, username and phone number, then try again."
+      );
+    if (msg.includes("not allowed"))
+      return fail(503, "PLATFORM_PAUSED", "Registration is temporarily closed. Please check back soon.");
+    if (msg.includes("too many") || msg.includes("rate limit"))
+      return fail(429, "INVALID_REQUEST", "Too many attempts. Wait a minute and try again.");
     return fail(500, "INTERNAL", "Could not create your account right now. Please try again.");
   }
 
@@ -73,6 +104,7 @@ export async function POST(req: Request) {
     signed_in: Boolean(data.session),
     needs_confirmation: !data.session,
     profile: null,
+    signup_bonus: data.session ? await claimSignupBonus(sb) : null,
   };
   return ok(result, { status: 201 });
 }

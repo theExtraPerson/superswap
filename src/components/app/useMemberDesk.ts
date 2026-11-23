@@ -3,9 +3,9 @@
 // Member desk state: one dashboard round-trip, guarded routes, and a mutate
 // wrapper that runs any money action then reloads — rules live in Postgres.
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { getDashboard } from "@/lib/app/api";
+import { claimWelcomeBonus, getDashboard } from "@/lib/app/api";
 import { browserApiConfig } from "@/lib/app/session";
 import { ApiError } from "@/lib/api/client";
 import type { DashboardPayload } from "@/lib/api/types";
@@ -40,6 +40,23 @@ export function useMemberDesk() {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void load();
   }, [load]);
+
+  // Welcome bonus safety net. Sign-in claims it server-side, but a session
+  // that predates the promo never passed through /api/auth/login — so try once
+  // per desk mount. The claim is replay-safe in SQL; a reload only happens when
+  // money actually arrived.
+  const bonusTried = useRef(false);
+  useEffect(() => {
+    if (!data || bonusTried.current) return;
+    bonusTried.current = true;
+    claimWelcomeBonus(cfg)
+      .then((res) => {
+        if (Number(res?.credited ?? 0) > 0) void load();
+      })
+      .catch(() => {
+        /* the bonus is never worth blocking the desk over */
+      });
+  }, [data, cfg, load]);
 
   const mutate = useCallback(
     async (fn: () => Promise<unknown>) => {

@@ -43,6 +43,16 @@ export const adminSettle = (
   cfg: ApiConfig = {}
 ) => apiRequest<Record<string, unknown>>("/admin/settle", post(input), cfg);
 
+/** Shashura gateway actions — collect a deposit, pay via API, or pull the
+ * final state by enquiry when the webhook hasn't landed. */
+export const adminShashura = (
+  input:
+    | { action: "collect_deposit"; id: number }
+    | { action: "pay_withdrawal"; id: number }
+    | { action: "refresh"; kind: "deposits" | "withdrawals"; id: number },
+  cfg: ApiConfig = {}
+) => apiRequest<Record<string, unknown>>("/admin/shashura", post(input), cfg);
+
 export const adminMember = (userId: string, cfg: ApiConfig = {}) =>
   apiRequest<AdminMemberPayload>(`/admin/members/${userId}`, { method: "GET" }, cfg);
 

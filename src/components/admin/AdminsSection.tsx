@@ -35,13 +35,13 @@ export function AdminsSection({ desk }: { desk: DeskApi }) {
   return (
     <div className="space-y-4">
       <Card title="Roster" hint="Every admin action you take here is logged in the audit trail with YOUR username.">
-        <ul className="divide-y divide-[#1d2c55] text-sm">
+        <ul className="divide-y divide-[#20304a] text-sm">
           {(dash?.admins ?? []).map((a) => (
             <li key={a.user_id} className="flex items-center justify-between gap-2 py-2">
               <div>
                 <span className="font-bold">{a.username ?? a.handle}</span>
-                {a.display_name && <span className="ml-2 text-[#9fb3e8]">{a.display_name}</span>}
-                <span className="ml-2 text-[#6b7fae]">
+                {a.display_name && <span className="ml-2 text-[#c3cfe4]">{a.display_name}</span>}
+                <span className="ml-2 text-[#92a0b9]">
                   {shortId(a.user_id)} · since {when(a.created_at)}
                   {a.user_id === selfId && " · you"}
                 </span>
@@ -67,7 +67,7 @@ export function AdminsSection({ desk }: { desk: DeskApi }) {
             {(dash?.pending_handles ?? []).map((h) => (
               <li key={h.handle} className="flex justify-between">
                 <span className="font-bold">@{h.handle}</span>
-                <span className="text-[#6b7fae]">queued {when(h.created_at)}</span>
+                <span className="text-[#92a0b9]">queued {when(h.created_at)}</span>
               </li>
             ))}
           </ul>

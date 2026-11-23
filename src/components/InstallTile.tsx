@@ -35,10 +35,10 @@ export function InstallTile() {
   if (installed) return null;
 
   return (
-    <section className="rounded-2xl border border-[#1d2c55] bg-[#0d1733] p-4 text-center">
+    <section className="card-grad p-4 text-center">
       <p className="text-2xl">📲</p>
       <h3 className="font-bold text-sm mt-1">Install SuperSwap (PWA)</h3>
-      <p className="text-[11px] text-[#6b7fae] mt-1">
+      <p className="text-[11px] text-[#92a0b9] mt-1">
         Add it to your home screen — your wallet, vaults and history one tap away.
       </p>
       {deferred ? (
@@ -48,12 +48,12 @@ export function InstallTile() {
             await deferred.userChoice;
             setDeferred(null);
           }}
-          className="mt-3 rounded-xl bg-[#f5b301] px-5 py-2 text-sm font-bold text-[#1a1400]"
+          className="btn-cta mt-3 px-5 py-2 text-sm"
         >
           Install app
         </button>
       ) : (
-        <p className="mt-3 text-[11px] text-[#9fb3e8]">
+        <p className="mt-3 text-[11px] text-[#c3cfe4]">
           Browser menu → “Add to Home screen” / “Install app”.
         </p>
       )}

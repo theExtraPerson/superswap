@@ -1,6 +1,6 @@
 ---
 name: fintech-plan-app
-description: Blueprint for building a mobile-money "investment plan" fintech app by cloning an existing site's UI/UX and user flow, then rebuilding the standard money logic on Next.js + Supabase. Covers the invariant subsystems — plans/products with daily earnings + maturity, an append-only ledger driven by security-definer RPCs, admin-editable money rules (min/max deposit & withdrawal, windows, credit time, payout fee %), API + manual two-way deposits/withdrawals, a two-level referral commission engine, an admin operations desk with a privilege guard + audit log, and the app shell (tab bar, downloadable PWA, floating Telegram support). Use when creating, cloning, or reverse-engineering an earnings/investment/referral wallet app, wiring Supabase money RPCs, or standing up its admin dashboard and quick-action UI.
+description: Blueprint for building a mobile-money "investment plan" fintech app by cloning an existing site's UI/UX and user flow, then rebuilding the standard money logic on Next.js + Supabase. Covers the invariant subsystems — plans/products with daily earnings + maturity, an append-only ledger driven by security-definer RPCs, admin-editable money rules (min/max deposit & withdrawal, windows, credit time, payout fee %, daily check-in reward), a two-way deposits/withdrawals flow (API + manual), a referral commission engine, an admin operations desk with a privilege guard + audit log, and the app shell (Home carousel · product tab with progress bars · league/team · wallet · avatar profile, tab bar, downloadable PWA, floating support). Use when creating, cloning, or reverse-engineering an earnings/investment/referral wallet app, wiring Supabase money RPCs, or standing up its admin dashboard and quick-action UI.
 ---
 
 # Fintech Plan App — Clone the Skin, Rebuild the Money Engine
@@ -23,7 +23,7 @@ is not.
 | 1 | Data model (ledger + queues) | `supabase/schema.sql` | Append-only ledger; RLS on every table |
 | 2 | Money RPC engine | `supabase/rpc.sql` | All writes go through `security definer` functions; never direct table writes |
 | 3 | Money rules & settings | `platform_settings` + `src/lib/supabase/config.ts` | A DB settings row overrides the code fallback; env mirrors it for UI |
-| 4 | Deposits & withdrawals | RPCs + gateway lib + callback route | Two-way (API + manual); settlement idempotent via a unique event key |
+| 4 | Deposits & withdrawals | RPCs + gateway lib + callback route | Deposits automatic via the gateway; withdrawals admin-approved (manual or API); settlement idempotent via a unique event key |
 | 5 | Plans / products & earnings | `plans` table + `src/lib/plans.ts` | `price + daily×days = total return`; daily credit matures at a fixed local hour |
 | 6 | Referral commission | `referral_commissions` + credit on activation | 2 levels, rates from settings, idempotent per investment |
 | 7 | Admin desk + privileges | `supabase/admin.sql` + `src/app/admin` | Membership-in-table = admin; every mutation guarded + audited |
@@ -85,15 +85,24 @@ Standard rules to expose (all admin-editable, none requiring a deploy):
 - `withdrawal_opens_at` / `withdrawal_closes_at` (local-time window)
 - `earnings_mature_at` (the daily credit hour, local time)
 - `registration_bonus` (0 disables)
+- `checkin_bonus` (daily check-in reward; 0 disables; overlay-funded like other promos)
 - `referral_rate_l1` / `referral_rate_l2`
 - `platform_frozen` + `freeze_message` (global "pause deposits/claims/withdrawals" switch)
 - `telegram_community` / `telegram_support` / `telegram_handle` (support links retarget without a deploy)
 
 ## 4 · Deposits & withdrawals (API + manual, two-way)
 
-**Deposit (collection):** create the `deposits` row first (so the reference derives from its id) → push `/requestToPay` → the payer approves on the phone → the **signed callback** (or an enquiry poll) settles it: `settle_collection` credits `amount`, flips the pending ledger row to `completed`, and stamps `settled_at`. A lost callback is swept by the daily job's reconcile pass, so no investor waits forever.
+The gateway in this build is **Shashura** (`https://shashura.com/developers`): Bearer token from `/auth` (client_id + secret, `X-Target-Environment: sandbox|production`, `X-COUNTRY: UG`), `/requestToPay` collections, `/disburse` payouts, `/enquiry/{ref|tid}` status pulls, and a signed `transaction.finalized` webhook. The server client lives in `src/lib/shashura/client.ts`; credentials are env-only (`SHASHURA_CLIENT_ID/SECRET/TARGET_ENV/WEBHOOK_SECRET`), never DB settings.
 
-**Withdrawal (disbursement):** the member's request runs **rules first** (window, min, whole shillings, banned check, and the eligibility lock below), then **holds the gross** from `balance` and queues a `pending` row. Nothing leaves from the client — an **admin approves** and chooses the route: gateway `/disburse` of the net, or a manual settle. Refuse → release the hold back. `PENDING` (MTN) stays open until the callback/poll confirms.
+**Deposit (collection) — AUTOMATIC:** the member opens a `deposits` row (pending) and `/api/deposits` immediately fires a MoMo PIN prompt (`/requestToPay`, ref `DEP-<id>-<ts>`) to the payer number. The signed callback (or a "Check status" enquiry) runs `app_hook_shashura`, which **credits the deposit itself** through `app_deposit_credited_core` — the SAME core the admin Confirm uses — funding the wallet at `amount` and the reserve at `net_amount` (only cash that really landed). The admin desk keeps Confirm/Reject purely as the fallback for bank transfers, dead/failed gateway attempts and amount mismatches (the one case the hook refuses to auto-credit). A failed collection stays retryable by the member or the admin.
+
+**Withdrawal (disbursement) — the admin approves, and picks the settlement route:** the member's request runs **rules first** (window, min, fee, banned check, coverage gate), debits the wallet at request time and queues a `pending` row. The desk then chooses:
+- **manual** — operator sends the money off-platform, then "Mark paid" (`app_admin_pay_withdrawal`).
+- **API** — "Pay via Shashura" (`/disburse`, deterministic ref `WD-<id>` so a replay hits `DUPLICATE_REFERENCE` instead of double-paying). Airtel returns `TS` and settles on the spot; MTN returns `PENDING` and settles automatically when the webhook fires. A `FAILED` result auto-refunds the member.
+
+Both routes funnel through ONE settlement core (`app_deposit_credited_core` / `app_withdrawal_paid_core` / `app_withdrawal_failed_core`), so automatic and manual settlement can never drift; the status transition under a row lock is the replay guard, and every callback is deduped in `payment_events`. If the webhook never lands (local dev, firewalled), the admin's "Check status" runs the same `app_hook_shashura` funnel from an enquiry result.
+
+Webhook rule: verify `X-Shashura-Signature` (HMAC-SHA256 over the RAW body, keyed with the app's webhook secret) before parsing; the callback route has no session, so it runs through the service-role-only `app_hook_shashura`.
 
 Quick-action / eligibility gate worth copying: block withdrawals for members with **no investment yet** (`not exists (select 1 from investments where user_id = auth.uid())`), so a registration bonus or referral credit can't be cashed out without ever funding a plan. Once they invest, it unlocks permanently.
 
@@ -137,13 +146,18 @@ Bootstrap the first admin with an idempotent `do $$` seed (edit the username lis
 
 ## 8 · App shell & quick actions
 
-The **user flow** to clone: Landing → Register (phone/username, optional invite) → Dashboard home → Wallet (deposit/withdraw/history) → Plans (activate) → Team (referrals) → Settings. A **single `vanta_dashboard()` RPC** returns the whole authenticated payload in one round-trip (profile, wallet, investments, transactions, referrals, payments, rules).
+The **user flow** to clone: Landing → Register (phone/username, optional invite) → **Home** → Products (**VIP**) → **League** (team) → **Wallet** → **Profile** (settings). A **single `vanta_dashboard()` RPC** returns the whole authenticated payload in one round-trip (profile, wallet, investments, transactions, referrals, payments, rules, check-in state).
 
-Standard, present-in-every-app elements:
-- **Tab bar** (Home · Plans · Wallet · Team · Account), sticky bottom, safe-area padding.
-- **Quick actions row**: Deposit · Withdraw · Invite · Chat · Support · Download.
-- **Floating Telegram**: one tap fans into Customer Service + Community group; links come from `vanta_links()` (settings) with brand fallback so the desk never disappears.
-- **Downloadable PWA**: `manifest.ts` (standalone, icons incl. maskable, app shortcuts to deposit/withdraw) + an install tile using `beforeinstallprompt`; iOS Add-to-Home via meta.
+Reference information architecture (superswca-style), one screen per bottom tab plus an avatar sheet:
+- **Tab bar** (Home · VIP · League · Wallet), sticky bottom, safe-area padding, icon + caption per tab. **Profile is not a tab** — it opens from the circular avatar button in the top-right header.
+- **Header** (all screens): brand wordmark left, avatar right; the avatar toggles the Profile sheet.
+- **Home**: wallet hero (balance + live reserve-coverage bar) → **sliding highlights carousel** (autoplay + dots + swipe; slides are built from the live rules: welcome bonus, referral rate, coverage, withdrawal window) → **daily check-in strip** (7-day boxes, `Claim +bonus` → the check-in RPC, replay-safe per platform day, streak shown) → **quick-action orbs** (Deposit · Withdraw · Vaults · Refer) → **recent activity** (top ledger rows + "See all" deep-link into Wallet).
+- **VIP**: an "your active plan" hero with a real **term progress bar** (elapsed/total toward maturity), then the product shelf — every card shows rate, duration, range and a **Start investing now** CTA that opens the activation form inline; open cycles list below with per-cycle progress + disclosed early exit.
+- **League**: rank-style header with real counters (Invited · Active · Commission earned), the referral code + Share/Copy card, and the **invited-members table** showing join date, first deposit, deposits total and what each earned you.
+- **Wallet**: **Total balance vs Withdrawable vs In active plans** up front (total = cash + locked principal; the delta is explained in one line), then the deposit/withdraw forms + queues, then the full **recent transactions** ledger.
+- **Profile**: identity block (gradient-ring avatar, name, @handle, member since) → money snapshot → **quick-jump buttons** (Wallet · Referrals · Team · Rewards) → settings pack: **Install app** (PWA tile), **Change password** (own-session GoTrue update, min length = registration's), **About** (promise, rails, compliance note, support), ops-desk link, **Sign out**.
+- **Floating support**: links come from settings with brand fallback so the desk never disappears.
+- **Downloadable PWA**: `manifest.ts` (standalone, icons incl. maskable, app shortcuts) + an install tile using `beforeinstallprompt`; iOS Add-to-Home via meta.
 - **Marketing/auth components** reuse `brand.ts` copy; the auth screens map username → email.
 
 ## Build workflow checklist

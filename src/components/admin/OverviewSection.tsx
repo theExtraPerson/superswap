@@ -21,7 +21,7 @@ export function OverviewSection({ desk }: { desk: DeskApi }) {
             tone={coverage >= 100 ? "good" : "bad"}
             sub="must stay ≥ 100%"
           />
-          <Stat label="Reserve" value={fmtUGX(m.reserve_balance)} sub="real money held" />
+          <Stat label="Reserve" value={fmtUGX(m.reserve_balance)} sub="operator float + promo overlay" />
           <Stat label="Obligations" value={fmtUGX(m.obligations)} sub="wallets + promised payouts" />
           <Stat label="Wallets" value={fmtUGX(m.wallets_total)} />
           <Stat
@@ -45,6 +45,16 @@ export function OverviewSection({ desk }: { desk: DeskApi }) {
           <Stat label="Deposits (all-time)" value={fmtUGX(m.deposits_total)} />
           <Stat label="Withdrawals (all-time)" value={fmtUGX(m.withdrawals_total)} />
           <Stat label="Yield paid (closed)" value={fmtUGX(m.yield_paid_total)} />
+          <Stat
+            label="Promo spend"
+            value={fmtUGX(Number(m.bonus_total ?? 0) + Number(m.referral_commission_total ?? 0))}
+            sub={`welcome bonus ${fmtUGX(m.bonus_total ?? 0)} · L1 commission ${fmtUGX(m.referral_commission_total ?? 0)}`}
+          />
+          <Stat
+            label="Reserve overlay"
+            value={fmtUGX(m.promo_overlay_total ?? 0)}
+            sub="non-cash promo funding — never drawable"
+          />
           <Stat label="Fee income" value={fmtUGX(m.fees_total)} tone="gold" />
           <Stat label="Reserve topped up" value={fmtUGX(m.reserve_topped_total)} />
           <Stat label="Reserve drawn" value={fmtUGX(m.reserve_drawn_total)} />
@@ -59,7 +69,7 @@ export function OverviewSection({ desk }: { desk: DeskApi }) {
           >
             {paused ? "PAUSED" : "RUNNING"}
           </span>
-          <span className="text-[#9fb3e8]">{desk.dash?.settings?.pause_message ?? ""}</span>
+          <span className="text-[#c3cfe4]">{desk.dash?.settings?.pause_message ?? ""}</span>
         </div>
       </Card>
     </div>

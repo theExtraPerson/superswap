@@ -42,14 +42,14 @@ export function AdminDesk() {
     (desk.dash?.metrics.pending_deposits ?? 0) + (desk.dash?.metrics.pending_withdrawals ?? 0);
 
   return (
-    <div className="min-h-dvh bg-[#060b1f] text-[#e8eefc]">
+    <div className="min-h-dvh text-[#f6f8ff]">
       <div className="mx-auto max-w-3xl px-4 pb-24">
         <header className="py-4 flex items-center justify-between">
           <div>
             <h1 className="text-lg font-black tracking-tight">
-              {brand.name} <span className="text-[#f5b301]">Ops Desk</span>
+              {brand.name} <span className="text-[#45e9ff]">Ops Desk</span>
             </h1>
-            <p className="text-[11px] text-[#6b7fae]">
+            <p className="text-[11px] text-[#92a0b9]">
               Guarded by table membership · every mutation audited
             </p>
           </div>
@@ -63,7 +63,7 @@ export function AdminDesk() {
                 {paused ? "PAUSED" : "RUNNING"}
               </span>
             )}
-            <Link href="/app" className="text-sm text-[#9fb3e8] underline">
+            <Link href="/app" className="text-sm text-[#c3cfe4] underline">
               ← Desk
             </Link>
           </div>
@@ -76,12 +76,12 @@ export function AdminDesk() {
         )}
 
         {desk.loading && desk.isAdmin === null ? (
-          <p className="text-sm text-[#6b7fae]">Checking your access…</p>
+          <p className="text-sm text-[#92a0b9]">Checking your access…</p>
         ) : desk.isAdmin === false && desk.gate === "auth" ? (
           <SignInCard desk={desk} />
         ) : desk.isAdmin === false ? (
           <Card title="No desk for you" hint="The RPC answered 403 FORBIDDEN — your account is not in the admins table.">
-            <p className="text-sm text-[#9fb3e8]">
+            <p className="text-sm text-[#c3cfe4]">
               Sign in with an operator account (bootstrapped in <code>admin.sql</code> or granted on
               the Admins tab by an existing admin).
             </p>
@@ -91,13 +91,15 @@ export function AdminDesk() {
           </Card>
         ) : (
           <>
-            <nav className="sticky top-0 z-30 -mx-4 px-4 py-2 bg-[#060b1f]/95 backdrop-blur border-b border-[#101c3d] flex gap-1 overflow-x-auto">
+            <nav className="sticky top-0 z-30 -mx-4 px-4 py-2 bg-[#080d19]/90 backdrop-blur-md border-b border-[#17233a] flex gap-1 overflow-x-auto">
               {TABS.map((t) => (
                 <button
                   key={t.id}
                   onClick={() => setTab(t.id)}
                   className={`whitespace-nowrap rounded-lg px-3 py-1.5 text-sm font-semibold ${
-                    tab === t.id ? "bg-[#f5b301] text-[#1a1400]" : "text-[#9fb3e8] hover:bg-[#12204a]"
+                    tab === t.id
+                      ? "bg-[linear-gradient(95deg,#23c8f0,#6a5cff_60%,#b03dff)] text-white shadow-[0_6px_16px_-8px_rgba(106,92,255,0.9)]"
+                      : "text-[#c3cfe4] hover:bg-[#16233d]"
                   }`}
                 >
                   {t.label}

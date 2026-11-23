@@ -51,7 +51,7 @@ export function SettingsSection({ desk }: { desk: DeskApi }) {
   return (
     <Card title="Money rules" hint="platform_settings is the authority — this form only edits keys the DB whitelists. Changes are audited.">
       {!desk.dash ? (
-        <p className="text-sm text-[#6b7fae]">Loading settings…</p>
+        <p className="text-sm text-[#92a0b9]">Loading settings…</p>
       ) : (
         <ul className="space-y-3">
           {visible.map((s) => {
@@ -62,7 +62,7 @@ export function SettingsSection({ desk }: { desk: DeskApi }) {
               <li key={s.key} className="flex flex-wrap items-end gap-2">
                 <div className="min-w-0 flex-1">
                   <div className={labelCls}>{s.label}</div>
-                  {s.hint && <div className="text-[11px] text-[#42557f] mt-0.5">{s.hint}</div>}
+                  {s.hint && <div className="text-[11px] text-[#5d6f93] mt-0.5">{s.hint}</div>}
                   {s.kind === "bool" ? (
                     <select
                       className={`${inputCls} mt-1`}
@@ -80,7 +80,7 @@ export function SettingsSection({ desk }: { desk: DeskApi }) {
                       onChange={(e) => setDrafts((d) => ({ ...d, [s.key]: e.target.value }))}
                     />
                   )}
-                  <div className="mt-0.5 text-[11px] text-[#42557f]">{s.key} = {current}</div>
+                  <div className="mt-0.5 text-[11px] text-[#5d6f93]">{s.key} = {current}</div>
                 </div>
                 <Btn variant="solid" disabled={!dirty || savingKey === s.key} onClick={() => save(s.key)}>
                   {savingKey === s.key ? "Saving…" : "Save"}
@@ -89,7 +89,7 @@ export function SettingsSection({ desk }: { desk: DeskApi }) {
             );
           })}
           {visible.length === 0 && (
-            <li className="text-sm text-[#6b7fae]">Could not load the editable-key list — is admin.sql applied?</li>
+            <li className="text-sm text-[#92a0b9]">Could not load the editable-key list — is admin.sql applied?</li>
           )}
         </ul>
       )}

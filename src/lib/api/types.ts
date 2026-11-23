@@ -35,6 +35,39 @@ export interface RulesPayload {
   platform_paused: boolean;
   pause_message?: string;
   support_contact?: string;
+  /** Referral commission paid to the direct (L1) referrer, percent. */
+  referral_commission_percent?: number | string;
+  /** One-time welcome bonus (UGX), credited on the member's first sign-in. */
+  signup_bonus?: number | string;
+  /** Withdrawal request window, wall clock in `timezone`. */
+  withdraw_window_from?: string;
+  withdraw_window_to?: string;
+  timezone?: string;
+  /** Server-side answer (Kampala clock), so the desk cannot trust a device clock. */
+  withdrawals_open?: boolean;
+}
+
+/** app_claim_signup_bonus() — replay-safe, so a second call reports 0. */
+export interface SignupBonusResult {
+  credited: number | string;
+  status: "credited" | "already_claimed" | "disabled";
+  wallet_balance: number | string;
+}
+
+/** app_dashboard().checkin — the Home tab's daily check-in state. */
+export interface CheckinState {
+  bonus: number | string;
+  claimed_today: boolean;
+  streak: number;
+}
+
+/** app_checkin() — replay-safe per platform day; a second call credits 0. */
+export interface CheckinResult {
+  credited: number | string;
+  status: "credited" | "already_claimed" | "disabled";
+  day: string;
+  streak: number;
+  wallet_balance: number | string;
 }
 
 export interface TransparencyPayload {
@@ -67,6 +100,7 @@ export type CycleStatus = "open" | "closed" | "exited" | "void";
 
 export interface CycleRow {
   id: number;
+  product_id?: number | null;
   principal: number | string;
   total_rate_pct: number | string;
   promised_yield: number | string;
@@ -80,6 +114,12 @@ export interface CycleRow {
 
 export type DepositStatus = "pending" | "confirmed" | "rejected";
 
+/** Shashura collection trail on a deposit (approval itself stays manual). */
+export type DepositGatewayState = "none" | "requested" | "verified" | "failed";
+
+/** Shashura payout trail on a withdrawal; 'paid'/'failed' mirror status. */
+export type WithdrawalGatewayState = "none" | "initiated" | "paid" | "failed";
+
 export interface DepositRow {
   id: number;
   amount: number | string;
@@ -92,6 +132,12 @@ export interface DepositRow {
 }
 
 export type WithdrawalStatus = "pending" | "paid" | "failed";
+
+/** POST /api/deposits answer: the row plus, when the gateway accepted the
+ * automatic MoMo request, the collect flag the UI turns into a hint. */
+export interface OpenDepositResult extends DepositRow {
+  collect?: { requested: boolean };
+}
 
 export interface WithdrawalRow {
   id: number;
@@ -120,6 +166,8 @@ export interface DashboardPayload {
   is_banned: boolean;
   rules: RulesPayload;
   transparency: TransparencyPayload;
+  /** Absent on a live DB that predates the daily-check-in migration. */
+  checkin?: CheckinState;
   products: ProductRow[];
   cycles: CycleRow[];
   deposits: DepositRow[];
@@ -135,11 +183,15 @@ export interface PublicInfoPayload {
 
 export interface TeamPayload {
   referral_code: string;
-  reward_amount: number | string;
+  /** Percent of each referee deposit that lands in this member's wallet. */
+  commission_percent: number | string;
+  signup_bonus?: number | string;
   members: {
     name: string;
     joined_at: string;
     first_deposit_at: string | null;
+    deposited_total?: number | string;
+    commission_earned?: number | string;
   }[];
   referral_credits: number | string;
 }
@@ -148,6 +200,8 @@ export interface AuthResult {
   signed_in: boolean;
   needs_confirmation: boolean;
   profile?: ProfileRow | null;
+  /** Welcome bonus outcome, when the sign-in carried the claim. */
+  signup_bonus?: SignupBonusResult | null;
 }
 
 // ---------- admin desk payloads (mirror app_admin_* in supabase/admin.sql) ----------
@@ -169,6 +223,9 @@ export interface AdminMetrics {
   deposits_total: number | string;
   withdrawals_total: number | string;
   fees_total: number | string;
+  bonus_total: number | string;
+  referral_commission_total: number | string;
+  promo_overlay_total: number | string;
   yield_paid_total: number | string;
   reserve_topped_total: number | string;
   reserve_drawn_total: number | string;
@@ -228,12 +285,20 @@ export interface AdminQueueDepositRow extends DepositRow {
   username: string | null;
   display_name: string | null;
   phone: string | null;
+  gateway_ref?: string | null;
+  gateway_tid?: string | null;
+  gateway_state?: DepositGatewayState;
+  gateway_detail?: string | null;
 }
 
 export interface AdminQueueWithdrawalRow extends WithdrawalRow {
   username: string | null;
   display_name: string | null;
   phone: string | null;
+  gateway_ref?: string | null;
+  gateway_tid?: string | null;
+  gateway_state?: WithdrawalGatewayState;
+  gateway_detail?: string | null;
 }
 
 export interface AdminSettingSpec {

@@ -46,20 +46,20 @@ export function MembersSection({ desk }: { desk: DeskApi }) {
             Search
           </Btn>
         </form>
-        <ul className="mt-3 divide-y divide-[#1d2c55]">
+        <ul className="mt-3 divide-y divide-[#20304a]">
           {(desk.dash?.members ?? []).map((p) => (
             <li key={p.user_id} className="flex items-center justify-between gap-2 py-2 text-sm">
               <button className="text-left" onClick={() => open(p.user_id)}>
-                <span className="font-bold text-[#f5b301]">@{p.username}</span>
-                <span className="ml-2 text-[#9fb3e8]">{p.display_name}</span>
-                <span className="ml-2 text-[#6b7fae]">{p.phone} · joined {when(p.created_at)}</span>
+                <span className="font-bold text-[#2fd4f2]">@{p.username}</span>
+                <span className="ml-2 text-[#c3cfe4]">{p.display_name}</span>
+                <span className="ml-2 text-[#92a0b9]">{p.phone} · joined {when(p.created_at)}</span>
                 {p.is_banned && <span className="ml-2 rounded bg-red-900 px-1.5 text-[10px] font-bold text-red-200">BANNED</span>}
               </button>
-              <span className="tabular-nums text-[#9fb3e8]">{fmtUGX(p.wallet_balance)}</span>
+              <span className="tabular-nums text-[#c3cfe4]">{fmtUGX(p.wallet_balance)}</span>
             </li>
           ))}
           {desk.dash && desk.dash.members.length === 0 && (
-            <li className="py-3 text-sm text-[#6b7fae]">No members match “{desk.search}”.</li>
+            <li className="py-3 text-sm text-[#92a0b9]">No members match “{desk.search}”.</li>
           )}
         </ul>
       </Card>
@@ -86,7 +86,7 @@ function MemberDetail({
   if (!p)
     return (
       <Card title="Member">
-        <p className="text-sm text-[#6b7fae]">Profile not found — closed from the list.</p>
+        <p className="text-sm text-[#92a0b9]">Profile not found — closed from the list.</p>
         <Btn className="mt-2" variant="ghost" onClick={onClose}>Close</Btn>
       </Card>
     );
@@ -118,13 +118,13 @@ function MemberDetail({
     <Card
       title={`Member @${p.username}`}
       hint={`${p.display_name} · ${p.phone} · code ${p.referral_code} · ${shortId(p.user_id)}`}
-      className="border-[#3b5bb5]"
+      className="border-[#2a95ff]"
     >
       <div className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-4">
-        <div><span className="text-[#6b7fae]">Wallet</span><div className="font-bold tabular-nums">{fmtUGX(p.wallet_balance)}</div></div>
-        <div><span className="text-[#6b7fae]">Open vaults</span><div className="font-bold tabular-nums">{detail.cycles.filter((c) => c.status === "open").length}</div></div>
-        <div><span className="text-[#6b7fae]">Referred by</span><div className="font-bold">{detail.referrer ? `@${detail.referrer.username}` : "—"}</div></div>
-        <div><span className="text-[#6b7fae]">Joined</span><div className="font-bold">{when(p.created_at)}</div></div>
+        <div><span className="text-[#92a0b9]">Wallet</span><div className="font-bold tabular-nums">{fmtUGX(p.wallet_balance)}</div></div>
+        <div><span className="text-[#92a0b9]">Open vaults</span><div className="font-bold tabular-nums">{detail.cycles.filter((c) => c.status === "open").length}</div></div>
+        <div><span className="text-[#92a0b9]">Referred by</span><div className="font-bold">{detail.referrer ? `@${detail.referrer.username}` : "—"}</div></div>
+        <div><span className="text-[#92a0b9]">Joined</span><div className="font-bold">{when(p.created_at)}</div></div>
       </div>
 
       <div className="mt-4 flex flex-wrap gap-2">
@@ -135,20 +135,20 @@ function MemberDetail({
         <Btn variant="ghost" onClick={toggleBan}>{p.is_banned ? "Unban" : "Ban"}</Btn>
         <Btn variant="ghost" onClick={onClose}>Close</Btn>
       </div>
-      <p className="mt-1 text-[11px] text-[#42557f]">
+      <p className="mt-1 text-[11px] text-[#5d6f93]">
         Credits are refused if the reserve would stop covering all obligations — fund the reserve first.
       </p>
 
       {detail.cycles.length > 0 && (
         <div className="mt-4">
-          <h4 className="text-[11px] uppercase tracking-wide text-[#6b7fae]">Vault cycles</h4>
+          <h4 className="text-[11px] uppercase tracking-wide text-[#92a0b9]">Vault cycles</h4>
           <ul className="mt-1 space-y-1 text-sm">
             {detail.cycles.map((c) => (
               <li key={c.id} className="flex justify-between gap-2">
                 <span>
                   {c.product_name ?? "vault"} · {fmtUGX(c.principal)} → {fmtUGX(c.payout_total)}
                 </span>
-                <span className={c.status === "open" ? "text-emerald-400" : "text-[#6b7fae]"}>
+                <span className={c.status === "open" ? "text-emerald-400" : "text-[#92a0b9]"}>
                   {c.status} · matures {when(c.matures_at)}
                 </span>
               </li>
@@ -160,23 +160,23 @@ function MemberDetail({
       {(detail.deposits.length > 0 || detail.withdrawals.length > 0) && (
         <div className="mt-4 grid grid-cols-2 gap-4">
           <div>
-            <h4 className="text-[11px] uppercase tracking-wide text-[#6b7fae]">Deposits</h4>
+            <h4 className="text-[11px] uppercase tracking-wide text-[#92a0b9]">Deposits</h4>
             <ul className="mt-1 space-y-1 text-sm">
               {detail.deposits.slice(0, 10).map((x) => (
                 <li key={x.id} className="flex justify-between gap-2">
                   <span>{fmtUGX(x.amount)}</span>
-                  <span className="text-[#6b7fae]">{x.status} · {when(x.created_at)}</span>
+                  <span className="text-[#92a0b9]">{x.status} · {when(x.created_at)}</span>
                 </li>
               ))}
             </ul>
           </div>
           <div>
-            <h4 className="text-[11px] uppercase tracking-wide text-[#6b7fae]">Withdrawals</h4>
+            <h4 className="text-[11px] uppercase tracking-wide text-[#92a0b9]">Withdrawals</h4>
             <ul className="mt-1 space-y-1 text-sm">
               {detail.withdrawals.slice(0, 10).map((x) => (
                 <li key={x.id} className="flex justify-between gap-2">
                   <span>{fmtUGX(x.payout_amount)}</span>
-                  <span className="text-[#6b7fae]">{x.status} · {when(x.created_at)}</span>
+                  <span className="text-[#92a0b9]">{x.status} · {when(x.created_at)}</span>
                 </li>
               ))}
             </ul>
@@ -185,17 +185,17 @@ function MemberDetail({
       )}
 
       <div className="mt-4">
-        <h4 className="text-[11px] uppercase tracking-wide text-[#6b7fae]">Ledger (latest)</h4>
+        <h4 className="text-[11px] uppercase tracking-wide text-[#92a0b9]">Ledger (latest)</h4>
         <ul className="mt-1 max-h-56 space-y-1 overflow-y-auto text-sm">
           {detail.ledger.map((l) => (
             <li key={l.id} className="flex justify-between gap-2">
-              <span className="text-[#9fb3e8]">{l.kind} · {l.note ?? ""} · {fmtDateTime(l.created_at)}</span>
+              <span className="text-[#c3cfe4]">{l.kind} · {l.note ?? ""} · {fmtDateTime(l.created_at)}</span>
               <span className={`tabular-nums ${Number(l.amount) >= 0 ? "text-emerald-400" : "text-red-400"}`}>
                 {Number(l.amount) >= 0 ? "+" : ""}{fmtUGX(l.amount)}
               </span>
             </li>
           ))}
-          {detail.ledger.length === 0 && <li className="text-[#6b7fae]">Empty.</li>}
+          {detail.ledger.length === 0 && <li className="text-[#92a0b9]">Empty.</li>}
         </ul>
       </div>
     </Card>

@@ -66,7 +66,7 @@ export function ReserveSection({ desk }: { desk: DeskApi }) {
               key={a}
               onClick={() => setAction(a)}
               className={`rounded-xl py-2 text-xs font-bold ${
-                action === a ? "bg-[#f5b301] text-[#1a1400]" : "border border-[#2b3f6f] text-[#9fb3e8]"
+                action === a ? "bg-[#2fd4f2] text-[#04202b]" : "border border-[#2b3d5c] text-[#c3cfe4]"
               }`}
             >
               {a === "topup" ? "Top up (money in)" : "Draw (money out)"}

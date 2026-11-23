@@ -1,11 +1,9 @@
 // Shared bits for the admin desk sections.
 import type { ReactNode } from "react";
 
-export const inputCls =
-  "w-full rounded-xl border border-[#2b3f6f] bg-[#0a1430] px-3 py-2 text-sm text-[#e8eefc] " +
-  "placeholder-[#42557f] outline-none focus:border-[#3b5bb5]";
+export const inputCls = "field";
 
-export const labelCls = "text-[11px] text-[#6b7fae] uppercase tracking-wide";
+export const labelCls = "text-[11px] text-[#92a0b9] uppercase tracking-wide";
 
 export function Field({ label, children }: { label: string; children: ReactNode }) {
   return (

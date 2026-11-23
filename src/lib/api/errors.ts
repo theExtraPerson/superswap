@@ -14,6 +14,8 @@ const FRIENDLY: Record<string, string> = {
   DAILY_LOCK: "Money movement is locked while the daily books close.",
   INSUFFICIENT_RESERVE:
     "The reserve does not cover this promise yet — the operation was refused to keep every payout payable.",
+  OUTSIDE_WINDOW:
+    "Withdrawal requests are only accepted during the published window.",
   INSUFFICIENT_FUNDS: "Your wallet does not have the available balance for that action.",
   BELOW_MINIMUM: "That amount is below the minimum.",
   ABOVE_MAXIMUM: "That amount is above the maximum.",
@@ -28,7 +30,22 @@ const FRIENDLY: Record<string, string> = {
   INVALID_NAME: "Please provide your real name (2-60 characters).",
   INVALID_PHONE: "Provide a valid Ugandan mobile number, e.g. 0772123456.",
   BAD_REFERRAL: "That referral code does not exist.",
+  // Raised when GoTrue rejects the insert for a reason it will not name for us
+  // (a raise inside the profile-bootstrap trigger, or a profile constraint).
+  SIGNUP_REJECTED: "We could not create that account — please re-check your details and try again.",
+  // platform_settings.auth_email_domain is unset or not a public hostname, so no
+  // synthetic login address can be built. Operator-only fix; 503 on purpose.
+  AUTH_NOT_CONFIGURED: "Account sign-in is not fully configured yet. Please try again shortly.",
   INVALID_REQUEST: "The request was malformed.",
+  // Shashura gateway faults (/api/admin/shashura + the webhook). The route
+  // already words each one; these only fire if a raw code reaches the mapper.
+  GATEWAY_NOT_CONFIGURED: "Shashura payments are not configured on this server yet.",
+  GATEWAY_DUPLICATE: "Shashura already recorded that reference — check the transaction status instead.",
+  GATEWAY_SHORT_FUNDS: "The Shashura merchant balance cannot cover this payout.",
+  GATEWAY_AUTH: "Shashura rejected our API credentials.",
+  GATEWAY_IP: "This server's IP is not whitelisted at Shashura.",
+  GATEWAY_ERROR: "Shashura declined the request.",
+  GATEWAY_UNAVAILABLE: "Could not reach the Shashura gateway. Try again shortly.",
   INTERNAL: "Something went wrong. Please try again.",
 };
 
@@ -44,7 +61,17 @@ const STATUS: Record<string, number> = {
   CYCLE_NOT_OPEN: 422,
   PLATFORM_PAUSED: 503,
   DAILY_LOCK: 503,
+  OUTSIDE_WINDOW: 503,
   INVALID_REQUEST: 422,
+  SIGNUP_REJECTED: 422,
+  AUTH_NOT_CONFIGURED: 503,
+  GATEWAY_NOT_CONFIGURED: 503,
+  GATEWAY_DUPLICATE: 409,
+  GATEWAY_SHORT_FUNDS: 422,
+  GATEWAY_AUTH: 502,
+  GATEWAY_IP: 502,
+  GATEWAY_ERROR: 502,
+  GATEWAY_UNAVAILABLE: 502,
   INTERNAL: 500,
 };
 

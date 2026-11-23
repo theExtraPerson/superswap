@@ -66,7 +66,7 @@ export function SignInCard({ desk }: { desk: DeskApi }) {
             {busy ? "…" : "Sign in"}
           </Btn>
         </div>
-        <p className="text-[11px] text-[#6b7fae] leading-snug">
+        <p className="text-[11px] text-[#92a0b9] leading-snug">
           No account yet? Register at <code>/register</code> like any member, then have an existing
           admin grant your username on the Admins tab — or add it to the bootstrap list in
           <code>admin.sql</code> and re-run it.

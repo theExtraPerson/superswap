@@ -41,6 +41,8 @@ cascade;
 
 -- ----------------------------------------------------------------------------
 -- 1. Money rules — the single authority (mirror in RPC fallbacks + config.ts)
+-- This seed only paints a FRESH database (do nothing on conflict); deployed
+-- projects change values through supabase/migrations/* and the admin desk.
 -- ----------------------------------------------------------------------------
 create table if not exists platform_settings (
   key text primary key,
@@ -49,13 +51,22 @@ create table if not exists platform_settings (
 );
 
 insert into platform_settings (key, value) values
-  ('auth_email_domain', 'accounts.superswap.local'), -- deploy-time; changing it breaks logins (synthetic emails)
-  ('min_deposit', '1000'),
+  -- Synthetic login host: usernames become username@<this>. It must be a real
+  -- public hostname (GoTrue rejects reserved TLDs like *.local) and can NEVER
+  -- change once a single member exists, because their login address is derived
+  -- from it. No mail is ever sent here.
+  ('auth_email_domain', 'accounts.superswap-nine.vercel.app'),
+  ('min_deposit', '10000'),
   ('min_withdrawal', '5000'),
-  ('withdrawal_fee_percent', '1.5'),
-  ('referral_reward', '0'),             -- flat, operator-funded; opt-in
-  ('settlement_hour', '22:00'),         -- matured vaults close at this hour
-  ('lock_at', '19:45'),                 -- daily money-movement lock window
+  ('withdrawal_fee_percent', '17'),
+  ('referral_commission_percent', '18'),  -- L1 only: to the referrer on each referee deposit
+  ('signup_bonus', '1500'),               -- UGX, once per member, credited at first sign-in
+  ('checkin_bonus', '100'),               -- UGX, daily check-in reward on the Home tab; 0 disables
+  ('timezone', 'Africa/Kampala'),         -- IANA zone the member-facing clock rules use
+  ('withdraw_window_from', '09:00'),      -- withdrawals open (wall clock in `timezone`)
+  ('withdraw_window_to', '21:00'),        -- withdrawals close (wall clock in `timezone`)
+  ('settlement_hour', '22:00'),           -- matured vaults close at this hour
+  ('lock_at', '19:45'),                   -- daily money-movement lock window (DB clock, UTC on Supabase)
   ('platform_paused', 'false'),
   ('pause_message', ''),
   ('support_contact', '')
@@ -139,10 +150,15 @@ create table if not exists reserve (
 );
 insert into reserve (id, balance) values (1, 0) on conflict (id) do nothing;
 
+-- 'promo_overlay' is the non-cash mirror the marketing promises (sign-up
+-- bonus, L1 commission) are funded from: it raises the reserve by exactly
+-- what it raises member obligations, so published coverage is unaffected and
+-- the overlay can never be drawn as free cash (free = reserve - obligations).
 create table if not exists reserve_entries (
   id bigint generated always as identity primary key,
   amount numeric(16,2) not null,                      -- signed
-  kind text not null check (kind in ('reserve_credit', 'reserve_debit', 'fee_income')),
+  kind text not null check (kind in (
+    'reserve_credit', 'reserve_debit', 'fee_income', 'promo_overlay')),
   balance_after numeric(16,2) not null,
   reference text,
   note text,
@@ -152,6 +168,12 @@ create table if not exists reserve_entries (
 );
 create unique index reserve_entries_idem_uidx on reserve_entries (idem_key) where idem_key is not null;
 create index if not exists reserve_entries_created_idx on reserve_entries (created_at desc);
+
+-- Re-run convergence: an older deployment carries the pre-promo kind list, and
+-- `create table if not exists` would leave that constraint in place forever.
+alter table reserve_entries drop constraint if exists reserve_entries_kind_check;
+alter table reserve_entries add constraint reserve_entries_kind_check
+  check (kind in ('reserve_credit', 'reserve_debit', 'fee_income', 'promo_overlay'));
 
 -- ----------------------------------------------------------------------------
 -- 5. Append-only member ledger (UPDATE/DELETE are never granted)
@@ -163,7 +185,7 @@ create table if not exists ledger (
   kind text not null check (kind in (
     'deposit_credit', 'withdrawal_debit', 'withdrawal_reversal',
     'vault_debit', 'vault_payout', 'vault_exit_credit',
-    'referral_reward', 'bonus_credit',
+    'referral_reward', 'bonus_credit', 'checkin_bonus',
     'adjustment_credit', 'adjustment_debit')),
   balance_after numeric(16,2) not null,
   ref_table text,
@@ -174,6 +196,26 @@ create table if not exists ledger (
 );
 create unique index ledger_idem_uidx on ledger (idem_key) where idem_key is not null;
 create index if not exists ledger_user_created_idx on ledger (user_id, created_at desc);
+
+-- Re-run convergence: an older deployment carries the pre-check-in kind list,
+-- and `create table if not exists` would leave that constraint in place forever.
+alter table ledger drop constraint if exists ledger_kind_check;
+alter table ledger add constraint ledger_kind_check check (kind in (
+    'deposit_credit', 'withdrawal_debit', 'withdrawal_reversal',
+    'vault_debit', 'vault_payout', 'vault_exit_credit',
+    'referral_reward', 'bonus_credit', 'checkin_bonus',
+    'adjustment_credit', 'adjustment_debit'));
+
+-- Daily check-in log — one row per member per platform-timezone day. The
+-- primary key IS the idempotency guard; reward credits flow through
+-- app_promo_credit like every other overlay-funded promotion (section 7 RPC).
+create table if not exists checkin_log (
+  user_id uuid not null references profiles (user_id) on delete cascade,
+  day date not null,
+  amount numeric(16,2) not null,
+  created_at timestamptz not null default now(),
+  primary key (user_id, day)
+);
 
 -- ----------------------------------------------------------------------------
 -- 6. Vault cycles — terms locked at opening via snapshot
@@ -193,14 +235,24 @@ create table if not exists vault_cycles (
   matures_at timestamptz not null,
   closed_at timestamptz,
   idem_key text,
-  note text
+  note text,
+  -- Row-creation stamp, kept for parity with every other ledger-ish table
+  -- (deposits/withdrawals/ledger/profiles all carry created_at). app_dashboard
+  -- and the admin member-detail RPC both order cycles by this column.
+  created_at timestamptz not null default now()
 );
 create index if not exists vault_cycles_user_idx on vault_cycles (user_id, status);
 create index if not exists vault_cycles_open_idx on vault_cycles (matures_at) where status = 'open';
 create unique index vault_cycles_idem_uidx on vault_cycles (idem_key) where idem_key is not null;
 
 -- ----------------------------------------------------------------------------
--- 7. Deposit & withdrawal queues (admin-confirmed settlement at MVP)
+-- 7. Deposit & withdrawal queues (deposits automatic, withdrawals approved)
+-- Deposits settle themselves: /api/deposits pushes a Shashura requestToPay
+-- to the payer's phone and the signed webhook credits via the shared
+-- deposit core. The admin Confirm/Reject survives as the fallback for bank
+-- transfers, failed gateway attempts and amount mismatches. Withdrawals are
+-- ALWAYS admin-approved — settled manually or via the Shashura API, which
+-- then completes automatically.
 -- ----------------------------------------------------------------------------
 create table if not exists deposits (
   id bigint generated always as identity primary key,
@@ -210,6 +262,13 @@ create table if not exists deposits (
   payer_account text not null,            -- sender's momo number / bank ref identity
   reference text,                         -- member's transaction reference
   status text not null default 'pending' check (status in ('pending', 'confirmed', 'rejected')),
+  -- Shashura collection trail (ref sent in requestToPay + returned tid) so the
+  -- webhook can match a final state back to this row.
+  gateway_ref text,
+  gateway_tid text,
+  gateway_state text not null default 'none'
+    check (gateway_state in ('none', 'requested', 'verified', 'failed')),
+  gateway_detail text,                    -- failure code/message when state='failed'
   idem_key text not null unique,
   note text,
   created_at timestamptz not null default now(),
@@ -217,6 +276,7 @@ create table if not exists deposits (
   settled_by uuid references auth.users (id)
 );
 create index if not exists deposits_status_idx on deposits (status, created_at desc);
+create unique index deposits_gateway_ref_uidx on deposits (gateway_ref) where gateway_ref is not null;
 
 create table if not exists withdrawals (
   id bigint generated always as identity primary key,
@@ -227,6 +287,13 @@ create table if not exists withdrawals (
   channel text not null default 'momo' check (channel in ('momo', 'bank')),
   destination_account text not null,
   status text not null default 'pending' check (status in ('pending', 'paid', 'failed')),
+  -- Shashura payout trail: 'initiated' waits for the final callback (MTN),
+  -- the settlement cores flip it to 'paid'/'failed' alongside the status.
+  gateway_ref text,
+  gateway_tid text,
+  gateway_state text not null default 'none'
+    check (gateway_state in ('none', 'initiated', 'paid', 'failed')),
+  gateway_detail text,
   idem_key text not null unique,
   note text,
   created_at timestamptz not null default now(),
@@ -234,6 +301,7 @@ create table if not exists withdrawals (
   processed_by uuid references auth.users (id)
 );
 create index if not exists withdrawals_status_idx on withdrawals (status, created_at desc);
+create unique index withdrawals_gateway_ref_uidx on withdrawals (gateway_ref) where gateway_ref is not null;
 
 -- Gateway event idempotency (reserved for the PSP cutover; used by manual settlement too)
 create table if not exists payment_events (
@@ -254,6 +322,7 @@ alter table profiles enable row level security;
 alter table reserve enable row level security;
 alter table reserve_entries enable row level security;
 alter table ledger enable row level security;
+alter table checkin_log enable row level security;
 alter table vault_cycles enable row level security;
 alter table deposits enable row level security;
 alter table withdrawals enable row level security;

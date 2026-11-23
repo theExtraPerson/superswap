@@ -13,6 +13,15 @@ export const fmtRate = (n: number | string) =>
 
 export const fmtPct = (n: number | string) => `${(num(n) || 0).toFixed(2)}%`;
 
+/**
+ * "09:00–21:00 Kampala" — the withdrawal window as the platform_settings
+ * defines it. The IANA zone is shortened to its readable tail for members.
+ */
+export const fmtWindow = (from?: string, to?: string, tz?: string) => {
+  const zone = tz ? (tz.split("/").pop() ?? tz).replace(/_/g, " ") : "local time";
+  return `${from ?? "—"}–${to ?? "—"} ${zone}`;
+};
+
 export const fmtShort = (n: number | string) => {
   const v = num(n) || 0;
   const abs = Math.abs(v);

@@ -1,8 +1,28 @@
 @import "tailwindcss";
 
+/* superswca.com dark theme: deep-navy field, cyan→indigo→violet gradients.
+   Tokens here are the single styling authority; component classes below carry
+   the signature looks (gradient CTA, gradient-border cards, hero balance, orbs,
+   bottom tab bar) so screens stay small and consistent. */
 :root {
-  --background: #060b1f;
-  --foreground: #e8eefc;
+  --background: #080d19;
+  --foreground: #f6f8ff;
+  --surface: #101a2b;
+  --surface-inset: #0c1626;
+  --line: #20304a;
+  --line-strong: #2b3d5c;
+  --muted: #92a0b9;
+  --soft: #c3cfe4;
+  --faint: #5d6f93;
+  --cyan: #2fd4f2;
+  --cyan-bright: #45e9ff;
+  --blue: #2a95ff;
+  --violet: #8b5cff;
+  --violet-deep: #b03dff;
+  --indigo: #6a5cff;
+  --ink-on-cyan: #04202b;
+  --grad-cta: linear-gradient(95deg, #23c8f0, #6a5cff 60%, #b03dff);
+  --grad-tab: linear-gradient(95deg, #6a5cff, #b03dff);
 }
 
 @theme inline {
@@ -14,11 +34,273 @@
 
 body {
   background: var(--background);
+  /* radial vignette at the top-left, like the reference app frame */
+  background-image: radial-gradient(ellipse at 14% 0%, #122340 0, transparent 36%);
+  background-attachment: fixed;
   color: var(--foreground);
-  font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
+  font-family: var(--font-geist-sans), -apple-system, "Segoe UI", Arial, sans-serif;
 }
 
-/* Diagonal SIM watermark across the viewport corner — always visible reminder */
+/* Big money numbers: tight, tabular, display weight (reference balance hero) */
+.money-hero {
+  font-weight: 800;
+  font-size: 34px;
+  line-height: 1;
+  letter-spacing: -0.8px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Signature full-bleed CTA: cyan -> indigo -> violet with lift + glow */
+.btn-cta {
+  background: var(--grad-cta);
+  color: #fff;
+  font-weight: 800;
+  border-radius: 16px;
+  box-shadow:
+    inset 0 1px rgba(255, 255, 255, 0.25),
+    0 14px 30px -12px rgba(106, 92, 255, 0.95);
+  transition: transform 0.12s ease, box-shadow 0.2s ease, filter 0.2s ease;
+}
+.btn-cta:hover {
+  filter: brightness(1.08);
+}
+.btn-cta:active {
+  transform: scale(0.985);
+}
+.btn-cta:disabled {
+  opacity: 0.4;
+  box-shadow: none;
+  cursor: not-allowed;
+}
+
+/* Ghost button with a gradient border (mask technique, like the reference) */
+.btn-ghost-grad {
+  position: relative;
+  isolation: isolate;
+  background: rgba(13, 18, 41, 0.6);
+  color: var(--soft);
+  border-radius: 14px;
+  border: 1px solid transparent;
+}
+.btn-ghost-grad::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1.5px;
+  background: linear-gradient(95deg, #2bd4e8, #8b5cff, #ff5fa2);
+  -webkit-mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  z-index: -1;
+}
+
+/* Card whose border is a violet→blue→cyan gradient */
+.card-grad {
+  position: relative;
+  isolation: isolate;
+  border: 1px solid transparent;
+  background: linear-gradient(125deg, #152139, #101a30);
+  border-radius: 14px;
+  box-shadow: 0 2px 14px rgba(0, 0, 0, 0.27);
+}
+.card-grad::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1.5px;
+  background: linear-gradient(120deg, #b03dff, #3b6bff 50%, #2bd4e8);
+  -webkit-mask:
+    linear-gradient(#fff 0 0) padding-box,
+    linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  z-index: -1;
+}
+
+/* Wallet balance hero: violet→navy→teal sweep with a cyan light at the right */
+.hero-wallet {
+  background:
+    radial-gradient(ellipse at 88% 45%, rgba(60, 220, 230, 0.32), transparent 52%),
+    linear-gradient(115deg, #7a1d8f, #4d1a8a 42%, #1a2a6e 78%, #0e3a5a);
+  border-radius: 18px;
+  box-shadow: 0 18px 40px -22px rgba(170, 60, 255, 0.8);
+}
+
+/* Circular quick-action orb (reference home shortcut grid) */
+.orb {
+  width: 50px;
+  height: 50px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.1s ease;
+}
+.orb:active {
+  transform: scale(0.94);
+}
+.orb-cyan {
+  background: radial-gradient(circle at 28% 22%, #1a4262, #071e38 75%);
+  border: 1px solid #0bcee5;
+  color: #45e9ff;
+  box-shadow: inset 0 0 13px rgba(4, 181, 219, 0.28), 0 0 10px rgba(5, 195, 220, 0.22);
+}
+.orb-violet {
+  background: radial-gradient(circle at 34% 24%, #482067, #230d44);
+  border: 1px solid #a441f7;
+  color: #bca8ff;
+  box-shadow: inset 0 0 13px rgba(164, 65, 247, 0.25), 0 0 10px rgba(139, 92, 255, 0.22);
+}
+.orb-emerald {
+  background: radial-gradient(circle at 34% 24%, #145b56, #0a2f36);
+  border: 1px solid #0eb99a;
+  color: #4cf09e;
+  box-shadow: inset 0 0 13px rgba(14, 185, 154, 0.25), 0 0 10px rgba(14, 185, 154, 0.2);
+}
+.orb-rose {
+  background: radial-gradient(circle at 34% 24%, #5c1d4c, #2c0f33);
+  border: 1px solid #ff5fa2;
+  color: #ff8fb8;
+  box-shadow: inset 0 0 13px rgba(255, 95, 162, 0.22), 0 0 10px rgba(255, 95, 162, 0.18);
+}
+
+/* Input fields: gradient-filled box, cyan glow ring on focus */
+.field {
+  width: 100%;
+  border-radius: 14px;
+  border: 1.5px solid #273453;
+  background: linear-gradient(120deg, #151d3c, #111832);
+  padding: 12px 16px;
+  font-size: 15px;
+  color: var(--foreground);
+  caret-color: var(--violet);
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+}
+.field::placeholder {
+  color: #5c6687;
+}
+.field:focus {
+  border-color: #5ff3ff;
+  background: #19203f;
+  box-shadow: 0 0 0 4px rgba(43, 212, 232, 0.14), 0 0 18px -6px rgba(139, 92, 255, 0.8);
+}
+
+/* Bottom tab bar (reference app-tabs): pinned, glow on the active tab */
+.tab-bar {
+  border-top: 1px solid #1a2c45;
+  background: #0b1424;
+  padding-bottom: env(safe-area-inset-bottom);
+}
+.tab-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  font-size: 10.5px;
+  font-weight: 650;
+  color: #9296b2;
+  padding: 9px 0 8px;
+  transition: color 0.15s ease;
+}
+.tab-btn-active {
+  color: #57aaff;
+  filter: drop-shadow(0 0 8px rgba(163, 54, 255, 0.55));
+}
+
+/* Segmented control (deposit/withdraw, channel pickers, tab strips) */
+.seg {
+  display: grid;
+  border: 1px solid #273453;
+  border-radius: 14px;
+  background: #151b36;
+  padding: 4px;
+  gap: 0;
+}
+.seg > button {
+  border-radius: 11px;
+  padding: 8px 4px;
+  font-size: 13px;
+  font-weight: 700;
+  color: #a9a6cc;
+  transition: color 0.15s ease, background 0.2s ease;
+}
+.seg > button.seg-on-a {
+  background: var(--grad-tab);
+  color: #fff;
+}
+.seg > button.seg-on-b {
+  background: linear-gradient(95deg, #23c8f0, #6a5cff);
+  color: #fff;
+}
+
+/* Status pills (pending / confirmed / paid …) */
+.pill {
+  font-size: 10px;
+  font-weight: 750;
+  padding: 3px 9px;
+  border-radius: 999px;
+  letter-spacing: 0.02em;
+}
+
+/* Progress bar (VIP maturity gauge, reserve coverage strips) */
+.progress {
+  height: 8px;
+  border-radius: 999px;
+  background: #16233c;
+  overflow: hidden;
+  border: 1px solid #20304a;
+}
+.progress > span {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--grad-cta);
+  transition: width 0.3s ease;
+}
+
+/* Header avatar button (reference profile entry: gradient ring, initial inside) */
+.avatar-btn {
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
+  font-size: 15px;
+  color: #fff;
+  background:
+    linear-gradient(#0e1728, #0e1728) padding-box,
+    var(--grad-cta) border-box;
+  border: 2px solid transparent;
+  box-shadow: 0 0 12px -2px rgba(139, 92, 255, 0.7);
+  transition: transform 0.1s ease;
+}
+.avatar-btn:active {
+  transform: scale(0.94);
+}
+
+/* Tappable settings row in the Profile sheet (label + caption + chevron) */
+.settings-row {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 13px 4px;
+  text-align: left;
+  border-bottom: 1px solid #17233a;
+}
+.settings-row:last-child {
+  border-bottom: none;
+}
+
+/* Diagonal watermark kept from the previous skin (sim pages only) */
 .sim-watermark::after {
   content: "SIMULATION ONLY";
   position: fixed;

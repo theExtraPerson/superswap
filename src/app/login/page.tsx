@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { login } from "@/lib/app/api";
 import { ApiError } from "@/lib/api/client";
+import { BrandMark } from "@/components/ui";
 
 /** /login — username + password (the DB maps the username to its account). */
 export default function LoginPage() {
@@ -14,8 +15,7 @@ export default function LoginPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const input =
-    "w-full rounded-xl bg-[#0a1430] border border-[#1d2c55] px-4 py-3 text-sm text-[#e8eefc] placeholder-[#42527c] outline-none focus:border-[#f5b301]";
+  const input = "field";
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -31,18 +31,18 @@ export default function LoginPage() {
   }
 
   return (
-    <main className="min-h-dvh bg-[#060b1f] text-[#e8eefc]">
+    <main className="min-h-dvh text-[#f6f8ff]">
       <div className="mx-auto max-w-md px-5 py-14 flex flex-col gap-5">
-        <header className="text-center">
-          <h1 className="text-3xl font-black tracking-tight">
-            Super<span className="text-[#f5b301]">Swap</span>
+        <header className="flex flex-col items-center gap-2 text-center">
+          <h1>
+            <BrandMark height={44} priority />
           </h1>
-          <p className="mt-1 text-[#9fb3e8] text-sm">Sign in to your savings</p>
+          <p className="text-[#c3cfe4] text-sm">Sign in to save, earn yield and grow</p>
         </header>
 
-        <form onSubmit={onSubmit} className="flex flex-col gap-4">
+        <form onSubmit={onSubmit} className="card-grad p-5 flex flex-col gap-4">
           <label className="block">
-            <span className="text-xs font-semibold text-[#9fb3e8]">Username</span>
+            <span className="text-xs font-semibold text-[#c3cfe4]">Username</span>
             <input
               className={input}
               value={username}
@@ -54,7 +54,7 @@ export default function LoginPage() {
           </label>
 
           <label className="block">
-            <span className="text-xs font-semibold text-[#9fb3e8]">Password</span>
+            <span className="text-xs font-semibold text-[#c3cfe4]">Password</span>
             <input
               className={input}
               type="password"
@@ -75,15 +75,15 @@ export default function LoginPage() {
           <button
             type="submit"
             disabled={busy || !username || !password}
-            className="rounded-2xl bg-[#f5b301] text-[#1a1400] font-black text-lg py-4 hover:bg-[#ffc93c] disabled:opacity-40"
+            className="btn-cta w-full py-4 text-[17px]"
           >
             {busy ? "Signing in…" : "Sign in"}
           </button>
         </form>
 
-        <p className="text-center text-xs text-[#6b7fae]">
+        <p className="text-center text-xs text-[#92a0b9]">
           New here?{" "}
-          <Link href="/register" className="text-[#f5b301] font-semibold">
+          <Link href="/register" className="text-[#45e9ff] font-semibold">
             Create an account
           </Link>
         </p>

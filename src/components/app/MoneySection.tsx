@@ -1,12 +1,16 @@
 "use client";
 
-// Money in/out tab: queued deposits and withdrawals with references.
-// Nothing here touches the balance directly — an operator confirms the real
-// money movement, and the ledger follows (see admin.sql settlement).
+// Money in/out tab. Mobile money deposits are AUTOMATIC: opening one pushes
+// a Shashura payment request to the number you entered, and your balance
+// credits itself the moment you approve the PIN prompt. Bank transfers and
+// anything the gateway can't take still wait for an operator confirmation.
+// Withdrawals always need the operator's settle decision. The window is a
+// server rule on the Kampala clock; this tab mirrors it so members are not
+// surprised by a refusal, while app_open_withdrawal stays the authority.
 
 import { useState } from "react";
 import { newIdemKey, openDeposit, openWithdrawal } from "@/lib/app/api";
-import { fmtDateTime, fmtRate, fmtUGX } from "@/lib/format";
+import { fmtDateTime, fmtRate, fmtUGX, fmtWindow } from "@/lib/format";
 import type { DepositRow, WithdrawalRow } from "@/lib/api/types";
 import { Banner, Field, input } from "./parts";
 import type { MemberDeskApi } from "./useMemberDesk";
@@ -21,25 +25,31 @@ export function MoneySection({ desk }: { desk: MemberDeskApi }) {
   const [channel, setChannel] = useState<Channel>("momo");
   const [account, setAccount] = useState("");
   const [reference, setReference] = useState("");
+  const [collectHint, setCollectHint] = useState<string | null>(null);
 
   const value = Number(amount.replace(/[^0-9.]/g, "")) || 0;
   const feePct = Number(d.rules.withdrawal_fee_percent);
   const fee = mode === "withdraw" ? Math.round((value * feePct) / 100 * 100) / 100 : 0;
   const min = mode === "deposit" ? Number(d.rules.min_deposit) : Number(d.rules.min_withdrawal);
+  const windowLabel = fmtWindow(d.rules.withdraw_window_from, d.rules.withdraw_window_to, d.rules.timezone);
+  const windowClosed = mode === "withdraw" && d.rules.withdrawals_open === false;
 
   async function submit() {
     if (!value || !account.trim()) return;
+    setCollectHint(null);
+    let requested = false;
     const okDone =
       mode === "deposit"
-        ? await desk.mutate(() =>
-            openDeposit({
+        ? await desk.mutate(async () => {
+            const res = await openDeposit({
               amount: value,
               channel,
               payerAccount: account.trim(),
               reference: reference.trim() || undefined,
               idemKey: newIdemKey("dep"),
-            })
-          )
+            });
+            requested = Boolean(res?.collect?.requested);
+          })
         : await desk.mutate(() =>
             openWithdrawal({
               amount: value,
@@ -51,39 +61,38 @@ export function MoneySection({ desk }: { desk: MemberDeskApi }) {
     if (okDone) {
       setAmount("");
       setReference("");
+      if (mode === "deposit" && requested) {
+        setCollectHint(`A payment request is on its way to ${account.trim()} — approve the PIN prompt and the deposit credits itself automatically.`);
+      }
     }
   }
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="grid grid-cols-2 gap-2">
+      <div className="seg grid-cols-2">
         {(["deposit", "withdraw"] as const).map((m) => (
           <button
             key={m}
             onClick={() => setMode(m)}
-            className={`rounded-xl py-2 text-xs font-bold ${
-              mode === m ? "bg-[#f5b301] text-[#1a1400]" : "border border-[#2b3f6f] text-[#9fb3e8]"
-            }`}
+            className={mode === m ? (m === "deposit" ? "seg-on-a" : "seg-on-b") : ""}
           >
             {m === "deposit" ? "Deposit (money in)" : "Withdraw (money out)"}
           </button>
         ))}
       </div>
 
-      <section className="rounded-2xl border border-[#1d2c55] bg-[#0d1733] p-4 flex flex-col gap-3">
-        <Field title="Amount (UGX)" hint={`Minimum ${fmtUGX(min)}`}>
+      <section className="card-grad p-4 flex flex-col gap-3">
+        <Field title="Amount (UGX)" hint={`Minimum ${fmtUGX(min)}${mode === "withdraw" ? ` · fee ${fmtRate(feePct)}` : ""}`}>
           <input className={input} value={amount} onChange={(e) => setAmount(e.target.value)} inputMode="numeric" placeholder="100000" />
         </Field>
 
         <Field title="Channel">
-          <div className="grid grid-cols-2 gap-2">
+          <div className="seg grid-cols-2">
             {(["momo", "bank"] as const).map((c) => (
               <button
                 key={c}
                 onClick={() => setChannel(c)}
-                className={`rounded-xl py-2 text-xs font-bold ${
-                  channel === c ? "bg-[#1e3a8a] text-white" : "border border-[#2b3f6f] text-[#9fb3e8]"
-                }`}
+                className={channel === c ? (c === "momo" ? "seg-on-a" : "seg-on-b") : ""}
               >
                 {c === "momo" ? "Mobile money" : "Bank transfer"}
               </button>
@@ -92,7 +101,7 @@ export function MoneySection({ desk }: { desk: MemberDeskApi }) {
         </Field>
 
         <Field
-          title={mode === "deposit" ? "Sending from (your number/account)" : "Pay out to (your number/account)"}
+          title={mode === "deposit" ? "Sending from (your mobile money number)" : "Pay out to (your number/account)"}
         >
           <input
             className={input}
@@ -103,35 +112,55 @@ export function MoneySection({ desk }: { desk: MemberDeskApi }) {
         </Field>
 
         {mode === "deposit" && (
-          <Field title="Transfer reference (optional)" hint="e.g. the MoMo transaction ID after you send.">
+          <Field title="Transfer reference (optional)" hint="Bank transfers only — the MoMo request needs no reference.">
             <input className={input} value={reference} onChange={(e) => setReference(e.target.value)} placeholder="S123ABC456" />
           </Field>
         )}
 
         {mode === "withdraw" && value > 0 && (
-          <div className="text-xs text-[#9fb3e8]">
+          <div className="text-xs text-[#c3cfe4]">
             Fee {fmtRate(feePct)} = {fmtUGX(fee)} · you receive {fmtUGX(value - fee)}
           </div>
         )}
 
+        {mode === "withdraw" && (
+          <Banner kind={windowClosed ? "warn" : "info"}>
+            {windowClosed
+              ? `Withdrawals are closed right now — they open ${windowLabel}, daily. Deposits and vaults stay available.`
+              : `Withdrawals are accepted ${windowLabel}, every day.`}
+          </Banner>
+        )}
+
+        {collectHint && <Banner kind="ok">{collectHint}</Banner>}
+
         <Banner kind="info">
           {mode === "deposit"
-            ? "Send the money to the SuperSwap merchant line (support tells you where), open this request with the reference, and an operator confirms the arrival. Your balance moves only when real money arrives."
+            ? channel === "momo"
+              ? "Mobile money deposits settle automatically: we send a payment request to the number above, you approve the PIN, and the balance updates within seconds. If the request can't go out, an operator finishes it manually."
+              : "Send the money to the SuperSwap merchant line (support tells you where), record it here with the reference, and an operator confirms the arrival. Your balance moves only when real money arrives."
             : "Withdrawals are queued and paid by an operator to the number/account above. Your balance is reserved the moment you request."}
         </Banner>
 
         <button
           onClick={submit}
-          disabled={desk.busy || !value || !account.trim() || value < min}
-          className="rounded-xl bg-[#f5b301] text-[#1a1400] font-black py-3 disabled:opacity-40"
+          disabled={desk.busy || !value || !account.trim() || value < min || windowClosed}
+          className="btn-cta w-full py-3.5 text-[15px]"
         >
-          {desk.busy ? "Working…" : mode === "deposit" ? "Record deposit" : "Request withdrawal"}
+          {desk.busy
+            ? "Working…"
+            : windowClosed
+              ? "Closed outside withdrawal hours"
+              : mode === "deposit"
+                ? channel === "momo"
+                  ? "Pay with Mobile Money"
+                  : "Record deposit"
+                : "Request withdrawal"}
         </button>
       </section>
 
       <section>
-        <h2 className="text-sm font-bold uppercase tracking-wide text-[#6b7fae] mb-2">Deposits</h2>
-        {d.deposits.length === 0 && <p className="text-xs text-[#6b7fae]">None yet.</p>}
+        <h2 className="text-sm font-bold uppercase tracking-wide text-[#92a0b9] mb-2">Deposits</h2>
+        {d.deposits.length === 0 && <p className="text-xs text-[#92a0b9]">None yet.</p>}
         <div className="space-y-2">
           {d.deposits.map((x) => (
             <Row key={`d${x.id}`} kind="deposit" row={x} />
@@ -140,8 +169,8 @@ export function MoneySection({ desk }: { desk: MemberDeskApi }) {
       </section>
 
       <section>
-        <h2 className="text-sm font-bold uppercase tracking-wide text-[#6b7fae] mb-2">Withdrawals</h2>
-        {d.withdrawals.length === 0 && <p className="text-xs text-[#6b7fae]">None yet.</p>}
+        <h2 className="text-sm font-bold uppercase tracking-wide text-[#92a0b9] mb-2">Withdrawals</h2>
+        {d.withdrawals.length === 0 && <p className="text-xs text-[#92a0b9]">None yet.</p>}
         <div className="space-y-2">
           {d.withdrawals.map((x) => (
             <Row key={`w${x.id}`} kind="withdrawal" row={x} />
@@ -159,16 +188,16 @@ function Row({ kind, row }: { kind: "deposit" | "withdrawal"; row: DepositRow | 
       ? "bg-amber-500/15 text-amber-300"
       : status === "confirmed" || status === "paid"
         ? "bg-emerald-500/15 text-emerald-300"
-        : "bg-[#1d2c55] text-[#9fb3e8]";
+        : "bg-[#20304a] text-[#c3cfe4]";
   return (
-    <div className="rounded-xl border border-[#1d2c55] bg-[#0a1430] p-3 flex items-center justify-between gap-2">
+    <div className="card-grad !rounded-xl p-3 flex items-center justify-between gap-2">
       <div className="text-xs">
         <div className="font-bold">{fmtUGX(row.amount)}</div>
-        <div className="text-[#6b7fae] mt-0.5">
+        <div className="text-[#92a0b9] mt-0.5">
           {kind === "withdrawal" && "fee "}{kind === "withdrawal" ? fmtUGX((row as WithdrawalRow).fee_amount) : row.channel} · {fmtDateTime(row.created_at)}
         </div>
       </div>
-      <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${tone}`}>{status}</span>
+      <span className={`pill ${tone}`}>{status}</span>
     </div>
   );
 }
