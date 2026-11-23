@@ -1,12 +1,13 @@
 "use client";
 
-// Money in/out tab. Mobile money deposits are AUTOMATIC: opening one pushes
-// a Shashura payment request to the number you entered, and your balance
-// credits itself the moment you approve the PIN prompt. Bank transfers and
-// anything the gateway can't take still wait for an operator confirmation.
-// Withdrawals always need the operator's settle decision. The window is a
-// server rule on the Kampala clock; this tab mirrors it so members are not
-// surprised by a refusal, while app_open_withdrawal stays the authority.
+// Money in/out tab. SuperSwap runs on mobile money only — Airtel Money and MTN
+// MoMo. There are no bank transfers. Deposits are AUTOMATIC: opening one pushes
+// a Shashura payment request to the number you entered, and your balance credits
+// itself the moment you approve the PIN prompt. Anything the gateway can't take
+// waits for an operator confirmation. Withdrawals always need the operator's
+// settle decision. The window is a server rule on the Kampala clock; this tab
+// mirrors it so members are not surprised by a refusal, while
+// app_open_withdrawal stays the authority.
 
 import { useState } from "react";
 import { newIdemKey, openDeposit, openWithdrawal } from "@/lib/app/api";
@@ -15,16 +16,16 @@ import type { DepositRow, WithdrawalRow } from "@/lib/api/types";
 import { Banner, Field, input } from "./parts";
 import type { MemberDeskApi } from "./useMemberDesk";
 
-type Channel = "momo" | "bank";
+// The only supported rail. Kept as a literal so the API's momo-only channel
+// check and the gateway collect path stay aligned.
+const CHANNEL = "momo" as const;
 
 export function MoneySection({ desk }: { desk: MemberDeskApi }) {
   const d = desk.data!;
   const [mode, setMode] = useState<"deposit" | "withdraw">("deposit");
 
   const [amount, setAmount] = useState("");
-  const [channel, setChannel] = useState<Channel>("momo");
   const [account, setAccount] = useState("");
-  const [reference, setReference] = useState("");
   const [collectHint, setCollectHint] = useState<string | null>(null);
 
   const value = Number(amount.replace(/[^0-9.]/g, "")) || 0;
@@ -43,9 +44,8 @@ export function MoneySection({ desk }: { desk: MemberDeskApi }) {
         ? await desk.mutate(async () => {
             const res = await openDeposit({
               amount: value,
-              channel,
+              channel: CHANNEL,
               payerAccount: account.trim(),
-              reference: reference.trim() || undefined,
               idemKey: newIdemKey("dep"),
             });
             requested = Boolean(res?.collect?.requested);
@@ -53,14 +53,13 @@ export function MoneySection({ desk }: { desk: MemberDeskApi }) {
         : await desk.mutate(() =>
             openWithdrawal({
               amount: value,
-              channel,
+              channel: CHANNEL,
               destinationAccount: account.trim(),
               idemKey: newIdemKey("wd"),
             })
           );
     if (okDone) {
       setAmount("");
-      setReference("");
       if (mode === "deposit" && requested) {
         setCollectHint(`A payment request is on its way to ${account.trim()} — approve the PIN prompt and the deposit credits itself automatically.`);
       }
@@ -86,36 +85,21 @@ export function MoneySection({ desk }: { desk: MemberDeskApi }) {
           <input className={input} value={amount} onChange={(e) => setAmount(e.target.value)} inputMode="numeric" placeholder="100000" />
         </Field>
 
-        <Field title="Channel">
-          <div className="seg grid-cols-2">
-            {(["momo", "bank"] as const).map((c) => (
-              <button
-                key={c}
-                onClick={() => setChannel(c)}
-                className={channel === c ? (c === "momo" ? "seg-on-a" : "seg-on-b") : ""}
-              >
-                {c === "momo" ? "Mobile money" : "Bank transfer"}
-              </button>
-            ))}
+        <Field title="Payment method" hint="Mobile money only — Airtel Money and MTN MoMo. No bank transfers.">
+          <div className="rounded-xl bg-[#0c1626] border border-[#20304a] px-3 py-2.5 text-sm font-semibold text-[#c3cfe4]">
+            Airtel Money · MTN MoMo
           </div>
         </Field>
 
-        <Field
-          title={mode === "deposit" ? "Sending from (your mobile money number)" : "Pay out to (your number/account)"}
-        >
+        <Field title={mode === "deposit" ? "Your mobile money number" : "Pay out to (your mobile money number)"}>
           <input
             className={input}
             value={account}
             onChange={(e) => setAccount(e.target.value)}
-            placeholder={channel === "momo" ? "0772123456" : "Account number / name"}
+            inputMode="tel"
+            placeholder="0772123456"
           />
         </Field>
-
-        {mode === "deposit" && (
-          <Field title="Transfer reference (optional)" hint="Bank transfers only — the MoMo request needs no reference.">
-            <input className={input} value={reference} onChange={(e) => setReference(e.target.value)} placeholder="S123ABC456" />
-          </Field>
-        )}
 
         {mode === "withdraw" && value > 0 && (
           <div className="text-xs text-[#c3cfe4]">
@@ -135,10 +119,8 @@ export function MoneySection({ desk }: { desk: MemberDeskApi }) {
 
         <Banner kind="info">
           {mode === "deposit"
-            ? channel === "momo"
-              ? "Mobile money deposits settle automatically: we send a payment request to the number above, you approve the PIN, and the balance updates within seconds. If the request can't go out, an operator finishes it manually."
-              : "Send the money to the SuperSwap merchant line (support tells you where), record it here with the reference, and an operator confirms the arrival. Your balance moves only when real money arrives."
-            : "Withdrawals are queued and paid by an operator to the number/account above. Your balance is reserved the moment you request."}
+            ? "Mobile money deposits settle automatically: we send a payment request to the number above, you approve the PIN, and the balance updates within seconds. If the request can't go out, an operator finishes it manually."
+            : "Withdrawals are queued and paid by an operator to your mobile money number. Your balance is reserved the moment you request."}
         </Banner>
 
         <button
@@ -151,9 +133,7 @@ export function MoneySection({ desk }: { desk: MemberDeskApi }) {
             : windowClosed
               ? "Closed outside withdrawal hours"
               : mode === "deposit"
-                ? channel === "momo"
-                  ? "Pay with Mobile Money"
-                  : "Record deposit"
+                ? "Pay with Mobile Money"
                 : "Request withdrawal"}
         </button>
       </section>

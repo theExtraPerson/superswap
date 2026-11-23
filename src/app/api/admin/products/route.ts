@@ -39,8 +39,8 @@ export async function POST(req: Request) {
     return fail(422, "INVALID_REQUEST", "Principal range is invalid.");
   if (!durationDays || durationDays < 7 || durationDays > 730)
     return fail(422, "INVALID_REQUEST", "duration_days must be 7-730.");
-  if (!Number.isFinite(totalRate) || totalRate < 0 || totalRate > 100)
-    return fail(422, "INVALID_REQUEST", "total_rate_pct must be 0-100 (TOTAL over the term).");
+  if (!Number.isFinite(totalRate) || totalRate < 0 || totalRate > 1000)
+    return fail(422, "INVALID_REQUEST", "total_rate_pct must be 0-1000 (TOTAL over the term).");
   if (!Number.isFinite(earlyExit) || earlyExit < 0 || earlyExit > 100)
     return fail(422, "INVALID_REQUEST", "early_exit_percent must be 0-100.");
 

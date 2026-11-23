@@ -104,7 +104,7 @@ export function ProductsSection({ desk }: { desk: DeskApi }) {
           <Field label="Min principal"><input className={inputCls} inputMode="numeric" value={form.min_principal} onChange={set("min_principal")} /></Field>
           <Field label="Max principal"><input className={inputCls} inputMode="numeric" value={form.max_principal} onChange={set("max_principal")} /></Field>
           <Field label="Days (7-730)"><input className={inputCls} inputMode="numeric" value={form.duration_days} onChange={set("duration_days")} /></Field>
-          <Field label="Total rate % (0-100)"><input className={inputCls} inputMode="decimal" value={form.total_rate_pct} onChange={set("total_rate_pct")} /></Field>
+          <Field label="Total rate % (0-1000)"><input className={inputCls} inputMode="decimal" value={form.total_rate_pct} onChange={set("total_rate_pct")} /></Field>
           <Field label="Early exit %"><input className={inputCls} inputMode="numeric" value={form.early_exit_percent} onChange={set("early_exit_percent")} /></Field>
           <Field label="Terms (optional)"><input className={inputCls} value={form.terms} onChange={set("terms")} /></Field>
         </div>

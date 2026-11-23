@@ -4,7 +4,8 @@ import type { TeamPayload } from "@/lib/api/types";
 
 /**
  * GET /api/team — own referral code, attributed members and earned rewards
- * (app_team). Attribution only — there is no commission on commissions.
+ * (app_team). Two generations: L1 on direct referees' deposits, L2 on their
+ * referees' deposits. Attribution only — commissions are never re-commissioned.
  */
 export async function GET(req: Request) {
   await connection(); // per-request under cacheComponents; never prerendered

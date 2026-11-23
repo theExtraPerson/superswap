@@ -82,7 +82,7 @@ create table if not exists vault_products (
   min_principal numeric(16,2) not null check (min_principal > 0),
   max_principal numeric(16,2) not null check (max_principal >= min_principal),
   duration_days integer not null check (duration_days between 7 and 730),
-  total_rate_pct numeric(8,3) not null check (total_rate_pct between 0 and 100),
+  total_rate_pct numeric(8,3) not null check (total_rate_pct between 0 and 1000),
   early_exit_percent numeric(5,2) not null default 90
     check (early_exit_percent between 0 and 100),   -- % of principal returned early; yield is forfeited
   terms text,
@@ -92,15 +92,21 @@ create table if not exists vault_products (
   updated_at timestamptz not null default now()
 );
 
+-- Catalogue mirrors the published SuperSwap product table (public/products.jpg).
+-- Each plan has a FIXED swap amount (min = max), so members commit the exact
+-- principal shown. total_rate_pct is the TOTAL profit over the term, expressed
+-- against that principal (e.g. Spark: 22,500 profit on 10,000 = 225%).
 insert into vault_products (slug, name, min_principal, max_principal, duration_days, total_rate_pct, early_exit_percent, terms) values
-  ('starter-30',  'Starter 30',  10000,  1000000,  30,  2.50, 90,
-   'Yield fixed at opening and fully covered by the published reserve. Early exit returns 90% of principal; unearned yield is forfeited.'),
-  ('growth-90',   'Growth 90',   50000,  5000000,  90,  7.00, 90,
-   'Yield fixed at opening and fully covered by the published reserve. Early exit returns 90% of principal; unearned yield is forfeited.'),
-  ('anchor-180',  'Anchor 180', 100000, 10000000, 180, 13.00, 90,
-   'Yield fixed at opening and fully covered by the published reserve. Early exit returns 90% of principal; unearned yield is forfeited.'),
-  ('anchor-365',  'Anchor 365', 100000, 20000000, 365, 24.00, 90,
-   'Yield fixed at opening and fully covered by the published reserve. Early exit returns 90% of principal; unearned yield is forfeited.')
+  ('spark',  'Spark',  10000,  10000,  10, 225.000, 90,
+   'Swap 10,000 UGX · earn 2,250 daily for 10 days · total profit 22,500. Yield is fixed at opening and paid in full at maturity. Early exit returns 90% of principal; unearned yield is forfeited.'),
+  ('comet',  'Comet',  30000,  30000,  15, 300.000, 90,
+   'Swap 30,000 UGX · earn 6,000 daily for 15 days · total profit 90,000. Yield is fixed at opening and paid in full at maturity. Early exit returns 90% of principal; unearned yield is forfeited.'),
+  ('nova',   'Nova',   80000,  80000,  20, 546.875, 90,
+   'Swap 80,000 UGX · total profit 437,500 over the term. Yield is fixed at opening and paid in full at maturity. Early exit returns 90% of principal; unearned yield is forfeited.'),
+  ('quasar', 'Quasar', 150000, 150000, 25, 500.000, 90,
+   'Swap 150,000 UGX · total profit 750,000 over the term. Yield is fixed at opening and paid in full at maturity. Early exit returns 90% of principal; unearned yield is forfeited.'),
+  ('galaxy', 'Galaxy', 300000, 300000, 30, 500.900, 90,
+   'Swap 300,000 UGX · earn 50,090 daily for 30 days · total profit 1,502,700. Yield is fixed at opening and paid in full at maturity. Early exit returns 90% of principal; unearned yield is forfeited.')
 on conflict (slug) do nothing;
 
 -- ----------------------------------------------------------------------------
@@ -258,8 +264,8 @@ create table if not exists deposits (
   id bigint generated always as identity primary key,
   user_id uuid not null references profiles (user_id) on delete cascade,
   amount numeric(16,2) not null check (amount > 0),
-  channel text not null default 'momo' check (channel in ('momo', 'bank')),
-  payer_account text not null,            -- sender's momo number / bank ref identity
+  channel text not null default 'momo' check (channel in ('momo')),   -- mobile money only (Airtel + MTN)
+  payer_account text not null,            -- sender's momo number
   reference text,                         -- member's transaction reference
   status text not null default 'pending' check (status in ('pending', 'confirmed', 'rejected')),
   -- Shashura collection trail (ref sent in requestToPay + returned tid) so the
@@ -284,7 +290,7 @@ create table if not exists withdrawals (
   amount numeric(16,2) not null check (amount > 0),
   fee_amount numeric(16,2) not null default 0,
   payout_amount numeric(16,2) not null,   -- amount - fee
-  channel text not null default 'momo' check (channel in ('momo', 'bank')),
+  channel text not null default 'momo' check (channel in ('momo')),   -- mobile money only (Airtel + MTN)
   destination_account text not null,
   status text not null default 'pending' check (status in ('pending', 'paid', 'failed')),
   -- Shashura payout trail: 'initiated' waits for the final callback (MTN),

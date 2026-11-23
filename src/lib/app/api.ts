@@ -73,7 +73,7 @@ export const exitVault = (cycleId: number, cfg: ApiConfig = {}) =>
 export const openDeposit = (
   input: {
     amount: number;
-    channel: "momo" | "bank";
+    channel: "momo";
     payerAccount: string;
     reference?: string;
     idemKey?: string;
@@ -84,7 +84,7 @@ export const openDeposit = (
 export const openWithdrawal = (
   input: {
     amount: number;
-    channel: "momo" | "bank";
+    channel: "momo";
     destinationAccount: string;
     idemKey?: string;
   },

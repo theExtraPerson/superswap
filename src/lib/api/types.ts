@@ -37,6 +37,8 @@ export interface RulesPayload {
   support_contact?: string;
   /** Referral commission paid to the direct (L1) referrer, percent. */
   referral_commission_percent?: number | string;
+  /** Referral commission paid to the 2nd-generation (L2) referrer, percent. */
+  referral_commission_l2_percent?: number | string;
   /** One-time welcome bonus (UGX), credited on the member's first sign-in. */
   signup_bonus?: number | string;
   /** Withdrawal request window, wall clock in `timezone`. */
@@ -183,8 +185,10 @@ export interface PublicInfoPayload {
 
 export interface TeamPayload {
   referral_code: string;
-  /** Percent of each referee deposit that lands in this member's wallet. */
+  /** Percent of each referee deposit that lands in this member's wallet (L1). */
   commission_percent: number | string;
+  /** Percent of each deposit the members you brought in earn for YOU (L2). */
+  commission_l2_percent?: number | string;
   signup_bonus?: number | string;
   members: {
     name: string;
@@ -193,7 +197,11 @@ export interface TeamPayload {
     deposited_total?: number | string;
     commission_earned?: number | string;
   }[];
+  /** Count of 2nd-generation members (people your referees referred). */
+  l2_members?: number;
   referral_credits: number | string;
+  /** Commission earned from 2nd-generation deposits. */
+  referral_credits_l2?: number | string;
 }
 
 export interface AuthResult {

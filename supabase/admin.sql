@@ -230,8 +230,11 @@ language plpgsql security definer set search_path = public as $$
 declare
   v_dep deposits;
   v_referrer uuid;
-  v_comm_pct numeric := app_setting_num('referral_commission_percent', 18);
+  v_l2_referrer uuid;
+  v_comm_pct numeric := app_setting_num('referral_commission_percent', 17);
+  v_comm_l2_pct numeric := app_setting_num('referral_commission_l2_percent', 1);
   v_commission numeric(16,2) := 0;
+  v_commission_l2 numeric(16,2) := 0;
   v_cash numeric;
   v_new_balance numeric;
 begin
@@ -270,28 +273,42 @@ begin
   values (v_cash, 'reserve_credit', v_new_balance, coalesce(v_dep.reference, v_dep.gateway_ref),
           'Deposit ' || v_dep.id || ' received via ' || p_source, p_actor, 'dep_reserve:' || v_dep.id);
 
-  -- L1 referral commission: a percent of THIS deposit, to the direct referrer,
-  -- every time (not only the first). Promo money: exempt from the solvency
-  -- gate and overlay-funded inside app_promo_credit (see rpc.sql). The idem
-  -- key makes replay impossible, even if this deposit is settled twice.
-  if coalesce(v_comm_pct, 0) > 0 then
-    select referred_by into v_referrer from profiles where user_id = v_dep.user_id;
-    if v_referrer is not null then
-      v_commission := round(v_dep.amount * v_comm_pct / 100, 2);
-      perform app_promo_credit(v_referrer, v_commission, 'referral_reward', 'deposits', v_dep.id,
-                               'Referral commission ' || trim(to_char(v_comm_pct, 'FM999.99')) ||
+  -- Referral commission, two generations, on THIS deposit:
+  --   L1 (referral_commission_percent) -> the direct referrer,
+  --   L2 (referral_commission_l2_percent) -> the referrer's own referrer.
+  -- Promo money: exempt from the solvency gate and overlay-funded inside
+  -- app_promo_credit (see rpc.sql). The idem keys make replay impossible, even
+  -- if this deposit is settled twice.
+  select referred_by into v_referrer from profiles where user_id = v_dep.user_id;
+  if coalesce(v_comm_pct, 0) > 0 and v_referrer is not null then
+    v_commission := round(v_dep.amount * v_comm_pct / 100, 2);
+    perform app_promo_credit(v_referrer, v_commission, 'referral_reward', 'deposits', v_dep.id,
+                             'Referral commission L1 ' || trim(to_char(v_comm_pct, 'FM999.99')) ||
+                               '% · ' || (select username from profiles where user_id = v_dep.user_id),
+                             'ref_comm:' || v_dep.id);
+  end if;
+  if coalesce(v_comm_l2_pct, 0) > 0 and v_referrer is not null then
+    select referred_by into v_l2_referrer from profiles where user_id = v_referrer;
+    if v_l2_referrer is not null then
+      v_commission_l2 := round(v_dep.amount * v_comm_l2_pct / 100, 2);
+      perform app_promo_credit(v_l2_referrer, v_commission_l2, 'referral_reward_l2', 'deposits', v_dep.id,
+                               'Referral commission L2 ' || trim(to_char(v_comm_l2_pct, 'FM999.99')) ||
                                  '% · ' || (select username from profiles where user_id = v_dep.user_id),
-                               'ref_comm:' || v_dep.id);
+                               'ref_comm_l2:' || v_dep.id);
     end if;
   end if;
 
   perform app_admin_log('confirm_deposit', v_dep.id::text,
                         v_dep.amount || ' UGX to ' || v_dep.user_id || ' via ' || p_source ||
                         case when v_commission > 0
-                             then ' · commission ' || v_commission || ' UGX to ' || v_referrer
+                             then ' · L1 ' || v_commission || ' UGX to ' || v_referrer
+                             else '' end ||
+                        case when v_commission_l2 > 0
+                             then ' · L2 ' || v_commission_l2 || ' UGX to ' || v_l2_referrer
                              else '' end);
   return jsonb_build_object('deposit', to_jsonb(v_dep), 'credited', v_dep.amount,
                             'commission_percent', v_comm_pct, 'commission', v_commission,
+                            'commission_l2_percent', v_comm_l2_pct, 'commission_l2', v_commission_l2,
                             'coverage_pct', app_coverage());
 end $$;
 
@@ -678,8 +695,8 @@ begin
     raise exception 'INVALID_REQUEST: slug must be lowercase, 2-31 chars [a-z0-9_-].';
   end if;
   if coalesce(p_json ->> 'total_rate_pct', '')::numeric < 0
-     or coalesce(p_json ->> 'total_rate_pct', '')::numeric > 100 then
-    raise exception 'INVALID_REQUEST: total_rate_pct must be 0-100 (TOTAL over the term).';
+     or coalesce(p_json ->> 'total_rate_pct', '')::numeric > 1000 then
+    raise exception 'INVALID_REQUEST: total_rate_pct must be 0-1000 (TOTAL over the term).';
   end if;
 
   if v_id is null then
@@ -728,6 +745,7 @@ language sql stable as $$
     ('signup_bonus',           'number', 'Welcome bonus (UGX)',          'One-time credit on the member''s first sign-in. 0 disables. Overlay-funded.'),
     ('checkin_bonus',          'number', 'Daily check-in reward (UGX)',  'Credited once per platform-timezone day from the Home tab. 0 disables. Overlay-funded.'),
     ('referral_commission_percent', 'number', 'Referral commission L1 (%)', 'Paid to the direct referrer on EVERY confirmed deposit by their referee. 0 disables. Overlay-funded.'),
+    ('referral_commission_l2_percent', 'number', 'Referral commission L2 (%)', 'Paid to the referrer''s own referrer (2nd generation) on EVERY confirmed deposit. 0 disables. Overlay-funded.'),
     ('settlement_hour',        'time',   'Settlement hour (HH:MM)',      'Vaults mature at this hour on their maturity date.'),
     ('lock_at',                'time',   'Daily lock start (HH:MM)',     'All money movement locked for 2 hours from this time. Uses the database clock (UTC on Supabase), not the timezone above.'),
     ('platform_paused',        'bool',   'Pause money movement',         'Blocks deposits/withdrawals/vault operations (reads keep working).'),

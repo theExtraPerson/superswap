@@ -322,7 +322,8 @@ begin
       'min_deposit', app_setting_num('min_deposit', 10000),
       'min_withdrawal', app_setting_num('min_withdrawal', 5000),
       'withdrawal_fee_percent', app_setting_num('withdrawal_fee_percent', 17),
-      'referral_commission_percent', app_setting_num('referral_commission_percent', 18),
+      'referral_commission_percent', app_setting_num('referral_commission_percent', 17),
+      'referral_commission_l2_percent', app_setting_num('referral_commission_l2_percent', 1),
       'signup_bonus', app_setting_num('signup_bonus', 1500),
       'withdraw_window_from', app_setting_text('withdraw_window_from', '09:00'),
       'withdraw_window_to', app_setting_text('withdraw_window_to', '21:00'),
@@ -491,7 +492,7 @@ declare
 begin
   perform app_assert_running();
   if p_amount < v_min then raise exception 'BELOW_MINIMUM: Minimum deposit is %.', v_min; end if;
-  if p_channel not in ('momo', 'bank') then raise exception 'INVALID_CHANNEL: momo or bank.'; end if;
+  if p_channel not in ('momo') then raise exception 'INVALID_CHANNEL: Mobile money only (Airtel or MTN).'; end if;
   if coalesce(trim(p_payer_account), '') = '' then
     raise exception 'MISSING_ACCOUNT: Provide the account/number you are sending from.';
   end if;
@@ -528,7 +529,7 @@ begin
   perform app_assert_running();
   perform app_assert_withdrawal_window();
   if p_amount < v_min then raise exception 'BELOW_MINIMUM: Minimum withdrawal is %.', v_min; end if;
-  if p_channel not in ('momo', 'bank') then raise exception 'INVALID_CHANNEL: momo or bank.'; end if;
+  if p_channel not in ('momo') then raise exception 'INVALID_CHANNEL: Mobile money only (Airtel or MTN).'; end if;
   if coalesce(trim(p_destination_account), '') = '' then
     raise exception 'MISSING_ACCOUNT: Provide the number/account to pay out to.';
   end if;
@@ -556,16 +557,18 @@ begin
 end $$;
 
 -- ---------------------------------------------------------------- team & commissions
--- One level only: the direct referrer earns a percent of each deposit their
--- referee makes (paid inside app_admin_confirm_deposit). No commission on
--- commissions — an L2 chain is not modelled anywhere, by design.
+-- Two generations. The direct referrer (L1) earns referral_commission_percent of
+-- each deposit their referee makes; the referee's own referrer (L2, the
+-- grandparent) earns referral_commission_l2_percent of the same deposit. Both
+-- are paid inside app_deposit_credited_core, overlay-funded and replay-safe.
 create or replace function app_team() returns jsonb
 language plpgsql stable security definer set search_path = public as $$
 declare v_me profiles := app_profile();
 begin
   return jsonb_build_object(
     'referral_code', v_me.referral_code,
-    'commission_percent', app_setting_num('referral_commission_percent', 18),
+    'commission_percent', app_setting_num('referral_commission_percent', 17),
+    'commission_l2_percent', app_setting_num('referral_commission_l2_percent', 1),
     'signup_bonus', app_setting_num('signup_bonus', 1500),
     'members', (select coalesce(jsonb_agg(jsonb_build_object(
                      'name', p.display_name, 'joined_at', p.created_at,
@@ -580,8 +583,12 @@ begin
                                                               where d.user_id = p.user_id)))
                    order by p.created_at desc), '[]'::jsonb)
       from profiles p where p.referred_by = v_me.user_id),
+    'l2_members', (select count(*) from profiles q
+      where q.referred_by in (select p.user_id from profiles p where p.referred_by = v_me.user_id)),
     'referral_credits', (select coalesce(sum(amount), 0) from ledger
-      where user_id = v_me.user_id and kind = 'referral_reward')
+      where user_id = v_me.user_id and kind = 'referral_reward'),
+    'referral_credits_l2', (select coalesce(sum(amount), 0) from ledger
+      where user_id = v_me.user_id and kind = 'referral_reward_l2')
   );
 end $$;
 
@@ -628,7 +635,8 @@ language sql stable security definer set search_path = public as $$
       'min_deposit', app_setting_num('min_deposit', 10000),
       'min_withdrawal', app_setting_num('min_withdrawal', 5000),
       'withdrawal_fee_percent', app_setting_num('withdrawal_fee_percent', 17),
-      'referral_commission_percent', app_setting_num('referral_commission_percent', 18),
+      'referral_commission_percent', app_setting_num('referral_commission_percent', 17),
+      'referral_commission_l2_percent', app_setting_num('referral_commission_l2_percent', 1),
       'signup_bonus', app_setting_num('signup_bonus', 1500),
       'withdraw_window_from', app_setting_text('withdraw_window_from', '09:00'),
       'withdraw_window_to', app_setting_text('withdraw_window_to', '21:00'),

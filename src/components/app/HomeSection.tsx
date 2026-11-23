@@ -100,10 +100,14 @@ function Highlights({ desk }: { desk: MemberDeskApi }) {
       Icon: IconGift,
     });
   const pct = Number(d.rules.referral_commission_percent ?? 0);
+  const pctL2 = Number(d.rules.referral_commission_l2_percent ?? 0);
   if (pct > 0)
     slides.push({
-      title: `Invite and earn ${fmtPct(pct)}`,
-      body: "One level only: you earn on every deposit the members you brought in make, credited when it is confirmed.",
+      title: `Invite and earn ${fmtPct(pct)}${pctL2 > 0 ? ` + ${fmtPct(pctL2)}` : ""}`,
+      body:
+        pctL2 > 0
+          ? `Two generations: you earn ${fmtPct(pct)} on every deposit your invites make, plus ${fmtPct(pctL2)} on every deposit the people they invite make — credited when a deposit is confirmed.`
+          : `You earn ${fmtPct(pct)} on every deposit the members you brought in make, credited when it is confirmed.`,
       Icon: IconTeam,
     });
   slides.push({

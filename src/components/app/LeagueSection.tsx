@@ -3,8 +3,8 @@
 // League tab — the invite & team page, laid out like the reference: a league
 // header with rank-style stats (invited / active / commission), the code +
 // share card, and the invited-members table with what each one earned.
-// One level only (L1): the referrer earns a percent of each referee deposit.
-// There is no commission on commissions, anywhere.
+// Two generations: you earn a percent of every deposit your direct invites (L1)
+// make, and a smaller percent of every deposit their invites (L2) make.
 
 import { useEffect, useState } from "react";
 import { fmtDate, fmtRate, fmtUGX } from "@/lib/format";
@@ -71,10 +71,13 @@ export function LeagueSection({ desk }: { desk: MemberDeskApi }) {
   }
 
   const commissionPct = Number(team?.commission_percent ?? d.rules.referral_commission_percent ?? 0);
+  const commissionL2Pct = Number(team?.commission_l2_percent ?? d.rules.referral_commission_l2_percent ?? 0);
   const bonus = Number(team?.signup_bonus ?? d.rules.signup_bonus ?? 0);
   const members = team?.members ?? [];
   const activeCount = members.filter((m) => m.first_deposit_at).length;
   const credits = Number(team?.referral_credits ?? 0);
+  const creditsL2 = Number(team?.referral_credits_l2 ?? 0);
+  const l2Members = Number(team?.l2_members ?? 0);
 
   return (
     <div className="flex flex-col gap-4">
@@ -85,8 +88,10 @@ export function LeagueSection({ desk }: { desk: MemberDeskApi }) {
           {activeCount > 0 ? "Team builder" : "Rookie"}
           <span className="text-[11px] font-semibold text-white/70 block mt-0.5">
             {commissionPct > 0
-              ? `Earning ${fmtRate(commissionPct)} on every deposit your invites make`
-              : "Referring earns recognition, not recruitment commissions"}
+            ? commissionL2Pct > 0
+              ? `Earning ${fmtRate(commissionPct)} on your invites' deposits · ${fmtRate(commissionL2Pct)} on their invites' deposits`
+              : `Earning ${fmtRate(commissionPct)} on every deposit your invites make`
+            : "Referring earns recognition, not recruitment commissions"}
           </span>
         </div>
         <div className="mt-3 grid grid-cols-3 gap-2 text-center">
@@ -123,6 +128,8 @@ export function LeagueSection({ desk }: { desk: MemberDeskApi }) {
         </div>
         <p className="text-[11px] text-[#92a0b9] mt-2 leading-relaxed">
           Friends join with your code in their link — it is auto-filled at sign-up.
+          {commissionPct > 0 ? ` You earn ${fmtRate(commissionPct)} of every deposit they make` : ""}
+          {commissionL2Pct > 0 ? `, plus ${fmtRate(commissionL2Pct)} of every deposit the people they invite make.` : "."}
           {bonus > 0 ? ` New members also start with a ${fmtUGX(bonus)} welcome bonus.` : ""}
         </p>
       </section>
@@ -162,8 +169,16 @@ export function LeagueSection({ desk }: { desk: MemberDeskApi }) {
             ))}
           </div>
         )}
-        {team && credits > 0 && (
-          <div className="mt-2 text-xs text-emerald-300">Commission earned: {fmtUGX(team.referral_credits)}</div>
+        {team && (credits > 0 || creditsL2 > 0 || l2Members > 0) && (
+          <div className="mt-2 text-xs text-emerald-300 space-y-0.5">
+            <div>1st-generation commission earned: {fmtUGX(credits)}</div>
+            {creditsL2 > 0 && <div>2nd-generation commission earned: {fmtUGX(creditsL2)}</div>}
+            {l2Members > 0 && (
+              <div className="text-[#92a0b9]">
+                {l2Members} second-generation member{l2Members === 1 ? "" : "s"} in your network.
+              </div>
+            )}
+          </div>
         )}
       </section>
     </div>

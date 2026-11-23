@@ -20,7 +20,7 @@ const FRIENDLY: Record<string, string> = {
   BELOW_MINIMUM: "That amount is below the minimum.",
   ABOVE_MAXIMUM: "That amount is above the maximum.",
   INVALID_AMOUNT: "Enter a valid positive amount.",
-  INVALID_CHANNEL: "Choose a valid channel (momo or bank).",
+  INVALID_CHANNEL: "Mobile money only — Airtel Money or MTN MoMo.",
   MISSING_ACCOUNT: "Provide the account number for this operation.",
   PRODUCT_NOT_FOUND: "That vault is not available.",
   CYCLE_NOT_OPEN: "That vault was not found or is no longer open.",

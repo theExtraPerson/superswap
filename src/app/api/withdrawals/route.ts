@@ -2,7 +2,8 @@ import { connection } from "next/server";
 import { callRpc, fail, idemValue, positiveNumber, readJson, resolveMember } from "@/lib/api/respond";
 import type { WithdrawalRow } from "@/lib/api/types";
 
-const CHANNELS = new Set(["momo", "bank"]);
+// Mobile money only (Airtel Money + MTN MoMo) — must be an array, not a string.
+const CHANNELS = new Set(["momo"]);
 
 /**
  * POST /api/withdrawals — { amount, channel, destinationAccount, idemKey? }
@@ -22,7 +23,7 @@ export async function POST(req: Request) {
   const channel = String(body.channel ?? "");
   const destinationAccount = String(body.destinationAccount ?? "").trim();
   if (!amount) return fail(422, "INVALID_AMOUNT", "Enter a valid amount.");
-  if (!CHANNELS.has(channel)) return fail(422, "INVALID_CHANNEL", "Choose momo or bank.");
+  if (!CHANNELS.has(channel)) return fail(422, "INVALID_CHANNEL", "Mobile money only — Airtel Money or MTN MoMo.");
   if (!destinationAccount) return fail(422, "MISSING_ACCOUNT", "Provide the number/account to pay out to.");
 
   return callRpc<WithdrawalRow>(client, "app_open_withdrawal", {

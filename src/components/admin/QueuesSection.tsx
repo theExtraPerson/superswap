@@ -106,7 +106,7 @@ export function QueuesSection({ desk }: { desk: DeskApi }) {
       {kind === "deposits" && (
         <Card
           title="Deposits needing attention"
-          hint="Healthy MoMo deposits settle themselves and never wait here. What you see is a bank transfer, a dead/failed gateway attempt, or a flagged amount — Confirm credits (and fires the commission), Reject closes with a reason."
+          hint="Healthy MoMo deposits settle themselves and never wait here. What you see is a dead/failed gateway attempt or a flagged amount — Confirm credits (and fires the L1 + L2 referral commission), Reject closes with a reason."
         >
           {!deposits || deposits.length === 0 ? (
             <p className="text-sm text-[#92a0b9]">Queue is clear.</p>

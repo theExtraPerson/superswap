@@ -3,16 +3,18 @@ import { callRpc, fail, idemValue, ok, positiveNumber, readJson, resolveMember }
 import type { DepositRow } from "@/lib/api/types";
 import { ShashuraError, normalizeMsisdn, requestToPay, shashuraConfigured } from "@/lib/shashura/client";
 
-const CHANNELS = new Set(["momo", "bank"]);
+// Mobile money only (Airtel Money + MTN MoMo). Bank transfers are not a
+// supported rail. NOTE: this must be an ARRAY — `new Set("momo")` would build a
+// set of characters {'m','o'} and reject every real deposit.
+const CHANNELS = new Set(["momo"]);
 
 /**
  * POST /api/deposits — { amount, channel, payerAccount, reference?, idemKey? }
- * Opens a deposit and, for mobile money, makes it AUTOMATIC: the same call
- * pushes a Shashura requestToPay PIN prompt to the payer number, and the
- * signed webhook credits wallet + reserve through the shared deposit core
- * (app_hook_shashura). The member never waits on an operator.
- * Bank rows — and every momo row when the gateway is down/unconfigured —
- * stay pending for the admin desk fallback. Rules live in app_open_deposit;
+ * Opens a deposit and makes it AUTOMATIC: the same call pushes a Shashura
+ * requestToPay PIN prompt to the payer number, and the signed webhook credits
+ * wallet + reserve through the shared deposit core (app_hook_shashura). The
+ * member never waits on an operator. When the gateway is down/unconfigured the
+ * row stays pending for the admin desk fallback. Rules live in app_open_deposit;
  * the collection is only recorded under the member's identity via
  * app_member_shashura_collect after the gateway accepted it.
  */
@@ -28,7 +30,7 @@ export async function POST(req: Request) {
   const channel = String(body.channel ?? "");
   const payerAccount = String(body.payerAccount ?? "").trim();
   if (!amount) return fail(422, "INVALID_AMOUNT", "Enter a valid amount.");
-  if (!CHANNELS.has(channel)) return fail(422, "INVALID_CHANNEL", "Choose momo or bank.");
+  if (!CHANNELS.has(channel)) return fail(422, "INVALID_CHANNEL", "Mobile money only — Airtel Money or MTN MoMo.");
   if (!payerAccount) return fail(422, "MISSING_ACCOUNT", "Provide the number/account you are sending from.");
 
   const opened = await callRpc<DepositRow>(client, "app_open_deposit", {
