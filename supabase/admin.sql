@@ -194,7 +194,7 @@ begin
                  from profiles me join profiles q on q.user_id = me.referred_by where me.user_id = p_user_id),
     'cycles', (select coalesce(jsonb_agg(to_jsonb(c) order by c.created_at desc), '[]'::jsonb)
       from (select id, principal, total_rate_pct, promised_yield, payout_total, status,
-                   opened_at, matures_at, closed_at, product_snapshot -> 'name' as product_name
+                   opened_at, matures_at, closed_at, created_at, product_snapshot -> 'name' as product_name
             from vault_cycles where user_id = p_user_id order by created_at desc limit 50) c),
     'ledger', (select coalesce(jsonb_agg(to_jsonb(l) order by l.created_at desc), '[]'::jsonb)
       from (select id, amount, kind, balance_after, note, created_at
@@ -965,7 +965,7 @@ revoke all on function app_admin_setting_spec() from public, anon;
 do $$
 declare
   v_handles text[] := array[
-    -- 'founder_username'
+    'holymountain8'
   ];
   v_handle text;
   v_user_id uuid;

@@ -1,13 +1,14 @@
 "use client";
 
-// Queues — the settlement workbench. Deposits ride the API: momo rows
-// request themselves (PIN prompt at open time) and auto-credit when the
-// signed Shashura callback lands — this queue keeps only the human cases
-// (bank transfers, dead attempts, amount mismatches) as Confirm/Reject
-// overrides. Withdrawals are ALWAYS approved here: settle manually ("Mark
-// paid") or via the API ("Pay via Shashura" — Airtel settles on the spot,
-// MTN settles when the webhook fires). Both settlement paths run the same
-// SQL cores, so the ledger can't drift between them.
+// Queues — the settlement workbench. Deposits are 100% automatic: momo rows
+// request their own PIN prompt when the member opens them and credit
+// themselves when the signed Shashura callback lands. There is NO manual
+// Confirm here by design — the desk only keeps Reject (abandon a dead request)
+// and Check status (re-sync a webhook that has not landed yet). Withdrawals
+// are ALWAYS approved here: settle manually ("Mark paid") or via the API
+// ("Pay via Shashura" — Airtel settles on the spot, MTN settles when the
+// webhook fires). Both settlement paths run the same SQL cores, so the ledger
+// can't drift between them.
 
 import { useCallback, useEffect, useState } from "react";
 import { Btn, Card } from "@/components/ui";
@@ -50,16 +51,14 @@ export function QueuesSection({ desk }: { desk: DeskApi }) {
     setNotes((n) => ({ ...n, [`${kind}:${id}`]: v }));
 
   const act = async (
-    action: "confirm_deposit" | "reject_deposit" | "pay_withdrawal" | "fail_withdrawal",
+    action: "reject_deposit" | "pay_withdrawal" | "fail_withdrawal",
     id: number
   ) => {
     setBusyId(`${action}:${id}`);
     const payload =
-      action === "confirm_deposit"
-        ? { action, id, note: note(id) || undefined }
-        : action === "pay_withdrawal"
-          ? { action, id, reference: note(id) || undefined }
-          : { action, id, reason: note(id) };
+      action === "pay_withdrawal"
+        ? { action, id, reference: note(id) || undefined }
+        : { action, id, reason: note(id) };
     const done = await desk.mutate(action, (cfg) => adminSettle(payload, cfg), () => {
       setNotes((n) => {
         const next = { ...n };
@@ -74,7 +73,7 @@ export function QueuesSection({ desk }: { desk: DeskApi }) {
   /** Gateway work: push a collection, fire an API payout, or pull the final
    * state by enquiry when the webhook has not (yet) landed. */
   const gateway = async (
-    action: "collect_deposit" | "pay_withdrawal" | "refresh",
+    action: "pay_withdrawal" | "refresh",
     id: number
   ) => {
     setBusyId(`${action}:${id}`);
@@ -106,7 +105,7 @@ export function QueuesSection({ desk }: { desk: DeskApi }) {
       {kind === "deposits" && (
         <Card
           title="Deposits needing attention"
-          hint="Healthy MoMo deposits settle themselves and never wait here. What you see is a dead/failed gateway attempt or a flagged amount — Confirm credits (and fires the L1 + L2 referral commission), Reject closes with a reason."
+          hint="Deposits settle themselves the moment the member approves the MoMo prompt — a healthy one never waits here. There is no manual Confirm: if a request went stale or the amount is wrong, Reject it and ask the member to deposit again. Check status re-syncs a callback that has not landed yet."
         >
           {!deposits || deposits.length === 0 ? (
             <p className="text-sm text-[#92a0b9]">Queue is clear.</p>
@@ -139,13 +138,6 @@ export function QueuesSection({ desk }: { desk: DeskApi }) {
                         onChange={(e) => setNote(d.id, e.target.value)}
                       />
                       <Btn
-                        variant="solid"
-                        disabled={busyId === `confirm_deposit:${d.id}`}
-                        onClick={() => act("confirm_deposit", d.id)}
-                      >
-                        {state === "verified" ? "Confirm (amount differs — verify first)" : "Confirm"}
-                      </Btn>
-                      <Btn
                         variant="danger"
                         disabled={busyId === `reject_deposit:${d.id}` || note(d.id).trim().length < 3}
                         onClick={() => act("reject_deposit", d.id)}
@@ -153,26 +145,15 @@ export function QueuesSection({ desk }: { desk: DeskApi }) {
                         Reject
                       </Btn>
                     </div>
-                    {momo && (
+                    {momo && state !== "none" && (
                       <div className="mt-2 flex flex-wrap gap-2">
-                        {(state === "none" || state === "failed") && (
-                          <Btn
-                            variant="ghost"
-                            disabled={busyId === `collect_deposit:${d.id}`}
-                            onClick={() => gateway("collect_deposit", d.id)}
-                          >
-                            {state === "failed" ? "Resend MoMo request (Shashura)" : "Request MoMo (Shashura)"}
-                          </Btn>
-                        )}
-                        {(state === "requested" || state === "verified") && (
-                          <Btn
-                            variant="ghost"
-                            disabled={busyId === `refresh:${d.id}`}
-                            onClick={() => gateway("refresh", d.id)}
-                          >
-                            Check status
-                          </Btn>
-                        )}
+                        <Btn
+                          variant="ghost"
+                          disabled={busyId === `refresh:${d.id}`}
+                          onClick={() => gateway("refresh", d.id)}
+                        >
+                          Check status
+                        </Btn>
                       </div>
                     )}
                   </li>
@@ -285,7 +266,7 @@ function GatewayPill({
   };
   const label: Record<string, string> = {
     requested: "MoMo request sent — auto-credits when the member approves",
-    verified: "Gateway money differs from the request — verify before Confirming",
+    verified: "Gateway money differs from the request — re-check or Reject and ask for a fresh deposit",
     initiated: "Shashura payout in flight — settles on confirmation",
     failed: "Shashura attempt failed",
   };
