@@ -7,7 +7,6 @@
 // app_* RPCs unchanged.
 
 import { useState } from "react";
-import { brand } from "@/lib/brand";
 import { useMemberDesk } from "./useMemberDesk";
 import { Banner, IconHome, IconTeam, IconVault, IconWallet, type DeskTab } from "./parts";
 import { HomeSection } from "./HomeSection";
@@ -83,10 +82,6 @@ export function MemberDesk() {
           {d && tab === "wallet" && <WalletSection desk={desk} />}
           {d && tab === "profile" && <ProfileSection desk={desk} go={go} />}
 
-          <footer className="text-center text-[10px] text-[#5d6f93] leading-relaxed pt-2 pb-4">
-            {brand.complianceNote}
-            {d?.rules.support_contact ? ` Support: ${d.rules.support_contact}` : ""}
-          </footer>
         </div>
       </div>
 

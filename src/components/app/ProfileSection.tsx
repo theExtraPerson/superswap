@@ -130,7 +130,6 @@ export function ProfileSection({ desk, go }: { desk: MemberDeskApi; go: (tab: De
           <div className="pb-4 text-[11.5px] text-[#c3cfe4] leading-relaxed">
             <p>{brand.promise}</p>
             <p className="mt-2">Rails: {brand.rails} · Currency: {brand.currency} · Market: {brand.market}.</p>
-            <p className="mt-2 text-[10.5px] text-[#92a0b9]">{brand.complianceNote}</p>
             {d.rules.support_contact && (
               <p className="mt-2">
                 Support: <span className="text-[#45e9ff] font-semibold">{d.rules.support_contact}</span>
@@ -142,7 +141,7 @@ export function ProfileSection({ desk, go }: { desk: MemberDeskApi; go: (tab: De
         <Link href="/admin" className="settings-row no-underline text-inherit">
           <div>
             <div className="text-sm font-bold">Ops desk</div>
-            <div className="text-[10.5px] text-[#92a0b9]">Admin operations console (access-checked)</div>
+            <div className="text-[10.5px] text-[#92a0b9]">Admin console</div>
           </div>
           <IconChevron />
         </Link>
