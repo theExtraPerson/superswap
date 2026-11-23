@@ -115,14 +115,6 @@ export function MoneySection({ desk }: { desk: MemberDeskApi }) {
           </Banner>
         )}
 
-        {collectHint && <Banner kind="ok">{collectHint}</Banner>}
-
-        <Banner kind="info">
-          {mode === "deposit"
-            ? "Mobile money deposits settle automatically: we send a payment request to the number above, you approve the PIN, and the balance updates within seconds. If the request can't go out, an operator finishes it manually."
-            : "Withdrawals are queued and paid by an operator to your mobile money number. Your balance is reserved the moment you request."}
-        </Banner>
-
         <button
           onClick={submit}
           disabled={desk.busy || !value || !account.trim() || value < min || windowClosed}
