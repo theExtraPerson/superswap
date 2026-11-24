@@ -12,7 +12,6 @@ import { signOutBrowser } from "@/lib/app/session";
 import { useDesk } from "./useDesk";
 import { OverviewSection } from "./OverviewSection";
 import { QueuesSection } from "./QueuesSection";
-import { ReserveSection } from "./ReserveSection";
 import { MembersSection } from "./MembersSection";
 import { ProductsSection } from "./ProductsSection";
 import { SettingsSection } from "./SettingsSection";
@@ -20,12 +19,11 @@ import { AdminsSection } from "./AdminsSection";
 import { AuditSection } from "./AuditSection";
 import { SignInCard } from "./SignInCard";
 
-type DeskTab = "overview" | "queues" | "reserve" | "members" | "products" | "settings" | "admins" | "audit";
+type DeskTab = "overview" | "queues" | "members" | "products" | "settings" | "admins" | "audit";
 
 const TABS: { id: DeskTab; label: string }[] = [
   { id: "overview", label: "Overview" },
   { id: "queues", label: "Queues" },
-  { id: "reserve", label: "Reserve" },
   { id: "members", label: "Members" },
   { id: "products", label: "Vaults" },
   { id: "settings", label: "Settings" },
@@ -127,7 +125,6 @@ export function AdminDesk() {
             <div className="pt-4">
               {tab === "overview" && <OverviewSection desk={desk} />}
               {tab === "queues" && <QueuesSection desk={desk} />}
-              {tab === "reserve" && <ReserveSection desk={desk} />}
               {tab === "members" && <MembersSection desk={desk} />}
               {tab === "products" && <ProductsSection desk={desk} />}
               {tab === "settings" && <SettingsSection desk={desk} />}

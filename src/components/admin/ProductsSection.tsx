@@ -97,7 +97,7 @@ export function ProductsSection({ desk }: { desk: DeskApi }) {
         </ul>
       </Card>
 
-      <Card title="New / update product" hint="Updating an existing slug overwrites the offer for FUTURE openings only. A new vault is refused unless its full payout is already covered by the reserve.">
+      <Card title="New / update product" hint="Updating an existing slug overwrites the offer for FUTURE openings only. Each vault's payout is funded from the external Shashura reserve, which the app does not mirror.">
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
           <Field label="Slug"><input className={inputCls} placeholder="anchor-540" value={form.slug} onChange={set("slug")} /></Field>
           <Field label="Name"><input className={inputCls} placeholder="Anchor 540" value={form.name} onChange={set("name")} /></Field>

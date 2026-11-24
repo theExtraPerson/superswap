@@ -24,7 +24,7 @@ export const metadata: Metadata = {
   metadataBase: new URL(origin),
   title: `${brand.name} — Term savings with reserved yield`,
   description:
-    "UGX term-savings vaults. The rate is fixed at opening, the yield is fully reserved before it is promised, and the coverage number is published to every member.",
+    "UGX term-savings vaults. The rate is fixed at opening, and every payout is funded in advance from the operator's reserve held securely with our licensed payment provider.",
   manifest: "/manifest.webmanifest",
   applicationName: brand.name,
   keywords: ["savings", "term deposit", "mobile money", "Uganda", "UGX"],

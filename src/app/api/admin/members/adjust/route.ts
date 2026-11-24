@@ -3,9 +3,9 @@ import { callRpc, fail, readJson, resolveAdmin, signedNumber, uuidValue } from "
 
 /**
  * POST /api/admin/members/adjust — { userId, delta, reason }
- * Signed wallet correction with a mandatory written reason. Positive deltas
- * must be reserve-covered (app_assert_solvent inside) — even gifts are
- * funded before they are given. Audited in SQL.
+ * Signed wallet correction with a mandatory written reason, audited in SQL.
+ * The float that funds every payout lives externally with Shashura, so the
+ * app applies no in-app solvency gate to corrections.
  */
 export async function POST(req: Request) {
   await connection(); // per-request under cacheComponents; never prerendered

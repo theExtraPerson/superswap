@@ -40,7 +40,7 @@ export async function generateMetadata({ searchParams }: Props): Promise<Metadat
     : `Create your ${brand.name} account`;
   const description = code
     ? `Use code ${code} to open your ${brand.name} account: UGX term-savings vaults with fixed, fully-reserved yield, plus the new-member welcome bonus.`
-    : "UGX term-savings vaults with fixed, fully-reserved yield. Every promise is covered by the reserve before it is made.";
+    : "UGX term-savings vaults with fixed yield. Every payout is funded in advance from the operator's reserve, held securely with our licensed payment provider.";
 
   return {
     title,

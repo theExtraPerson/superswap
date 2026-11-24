@@ -1,9 +1,9 @@
 -- ============================================================================
 -- SuperSwap — Ledger Core schema (real application)
--- UGX savings with FULLY-RESERVED term vaults:
---   every promised payout must be covered by the operator reserve BEFORE the
---   vault opens; the coverage invariant is enforced inside the RPCs, and the
---   coverage % is published to members.
+-- UGX savings with term vaults whose backing float is held EXTERNALLY in the
+-- Shashura account. The application deliberately keeps no in-app reserve table
+-- and never mirrors that external balance — it holds only the member ledger,
+-- the vault promises and the settlement queues.
 --
 -- Run order: schema.sql  ->  rpc.sql  ->  admin.sql
 -- Pre-launch migration: this file drops the legacy simulator objects first.
@@ -147,42 +147,7 @@ create index if not exists profiles_referral_code_idx on profiles (lower(referra
 create index if not exists profiles_referred_by_idx on profiles (referred_by);
 
 -- ----------------------------------------------------------------------------
--- 4. Reserve — the declared operator float that secures every promise
--- ----------------------------------------------------------------------------
-create table if not exists reserve (
-  id integer primary key check (id = 1),
-  balance numeric(16,2) not null default 0 check (balance >= 0),
-  updated_at timestamptz not null default now()
-);
-insert into reserve (id, balance) values (1, 0) on conflict (id) do nothing;
-
--- 'promo_overlay' is the non-cash mirror the marketing promises (sign-up
--- bonus, L1 commission) are funded from: it raises the reserve by exactly
--- what it raises member obligations, so published coverage is unaffected and
--- the overlay can never be drawn as free cash (free = reserve - obligations).
-create table if not exists reserve_entries (
-  id bigint generated always as identity primary key,
-  amount numeric(16,2) not null,                      -- signed
-  kind text not null check (kind in (
-    'reserve_credit', 'reserve_debit', 'fee_income', 'promo_overlay')),
-  balance_after numeric(16,2) not null,
-  reference text,
-  note text,
-  actor_user_id uuid references auth.users (id) on delete set null,
-  idem_key text,
-  created_at timestamptz not null default now()
-);
-create unique index reserve_entries_idem_uidx on reserve_entries (idem_key) where idem_key is not null;
-create index if not exists reserve_entries_created_idx on reserve_entries (created_at desc);
-
--- Re-run convergence: an older deployment carries the pre-promo kind list, and
--- `create table if not exists` would leave that constraint in place forever.
-alter table reserve_entries drop constraint if exists reserve_entries_kind_check;
-alter table reserve_entries add constraint reserve_entries_kind_check
-  check (kind in ('reserve_credit', 'reserve_debit', 'fee_income', 'promo_overlay'));
-
--- ----------------------------------------------------------------------------
--- 5. Append-only member ledger (UPDATE/DELETE are never granted)
+-- 4. Append-only member ledger (UPDATE/DELETE are never granted)
 -- ----------------------------------------------------------------------------
 create table if not exists ledger (
   id bigint generated always as identity primary key,
@@ -224,7 +189,7 @@ create table if not exists checkin_log (
 );
 
 -- ----------------------------------------------------------------------------
--- 6. Vault cycles — terms locked at opening via snapshot
+-- 5. Vault cycles — terms locked at opening via snapshot
 -- ----------------------------------------------------------------------------
 create table if not exists vault_cycles (
   id bigint generated always as identity primary key,
@@ -252,7 +217,7 @@ create index if not exists vault_cycles_open_idx on vault_cycles (matures_at) wh
 create unique index vault_cycles_idem_uidx on vault_cycles (idem_key) where idem_key is not null;
 
 -- ----------------------------------------------------------------------------
--- 7. Deposit & withdrawal queues (deposits automatic, withdrawals approved)
+-- 6. Deposit & withdrawal queues (deposits automatic, withdrawals approved)
 -- Deposits settle themselves: /api/deposits pushes a Shashura requestToPay
 -- to the payer's phone and the signed webhook credits via the shared
 -- deposit core. The admin Confirm/Reject survives as the fallback for bank
@@ -320,13 +285,11 @@ create table if not exists payment_events (
 );
 
 -- ----------------------------------------------------------------------------
--- 8. Security: RLS on every table; writes ONLY through security-definer RPCs.
+-- 7. Security: RLS on every table; writes ONLY through security-definer RPCs.
 -- ----------------------------------------------------------------------------
 alter table platform_settings enable row level security;
 alter table vault_products enable row level security;
 alter table profiles enable row level security;
-alter table reserve enable row level security;
-alter table reserve_entries enable row level security;
 alter table ledger enable row level security;
 alter table checkin_log enable row level security;
 alter table vault_cycles enable row level security;
@@ -357,7 +320,7 @@ create policy withdrawals_self_read on withdrawals
   for select using (auth.uid() = user_id);
 
 -- ----------------------------------------------------------------------------
--- 9. updated_at maintenance
+-- 8. updated_at maintenance
 -- ----------------------------------------------------------------------------
 create or replace function app_touch_updated_at() returns trigger
 language plpgsql as $$
@@ -374,7 +337,7 @@ create trigger profiles_touch before update on profiles
   for each row execute function app_touch_updated_at();
 
 -- ----------------------------------------------------------------------------
--- 10. Profile bootstrap from sign-up metadata (name, username, phone, referral)
+-- 9. Profile bootstrap from sign-up metadata (name, username, phone, referral)
 -- ----------------------------------------------------------------------------
 create or replace function app_handle_new_user() returns trigger
 language plpgsql security definer set search_path = public as $$

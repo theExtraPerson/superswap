@@ -5,7 +5,7 @@ export const brand = {
   name: "SuperSwap",
   tagline: "Term savings with reserved yield.",
   promise:
-    "Every payout we promise is covered by the reserve before we promise it — and you can watch the coverage number, live, on your dashboard.",
+    "Every payout we promise is funded in advance from the operator's reserve, held securely with our licensed payment provider — never from newer members' deposits.",
   currency: "UGX",
   market: "Uganda",
   rails: "MTN MoMo · Airtel Money",

@@ -5,10 +5,10 @@ lesson the original scheme material teaches: **fixed daily yields and
 recruitment commissions are how these schemes collapse.** SuperSwap is the
 honest version of the same mechanics —
 
-- **Fully-reserved term vaults.** The total rate is fixed at opening (never a
-  "daily" rate), and the SQL *refuses to open any vault whose full payout is
-  not already funded* in the operator reserve. Coverage % is published to
-  every member and can never silently drop below 100%.
+- **Term vaults with a fixed total rate.** The total rate is fixed at opening
+  (never a "daily" rate). The float that backs every payout is held in the
+  external Shashura account, which the application does not mirror — there is
+  no in-app reserve balance or coverage number.
 - **One-level (L1) referral commission + a one-time welcome bonus.** The
   referrer earns a percent of every deposit their referee makes; new members
   are credited a flat bonus at sign-in. Both are operator-funded promotions
@@ -34,38 +34,37 @@ functions.
 
 Apply in order against your project (SQL editor or `supabase db push`):
 
-0. **`migrations/*.sql`** — deploy-time data + constraint changes for a database
-   that already runs (e.g. `2026-11-22-money-rules-v2.sql` retires the old flat
-   referral reward, sets the 17% withdrawal fee, 18% L1 commission, 1 500 UGX
-   welcome bonus and the 09:00–21:00 `Africa/Kampala` withdrawal window, and
-   extends the `reserve_entries` kind list with `promo_overlay`). Skip on a
-   virgin database — `schema.sql` already seeds those values — then re-run steps
-   2 and 3 so the functions match.
+0. **`migrations/*.sql`** — deploy-time changes for a database that already
+   runs. Apply in filename order: `2026-11-22-money-rules-v2.sql` retires the
+   old flat referral reward and sets the 17% withdrawal fee, 18% L1 commission,
+   1 500 UGX welcome bonus and the 09:00–21:00 `Africa/Kampala` withdrawal
+   window; `2026-11-24-remove-reserve-functions.sql` MUST run before
+   `2026-11-24-drop-reserve-tables.sql` (functions first, then the tables —
+   never CASCADE). Skip on a virgin database — `schema.sql` already reflects
+   the current shape — then re-run steps 2 and 3 so the functions match.
 
 1. **`schema.sql`** — drops any legacy simulator tables; creates
    `platform_settings` (the money-rule authority, seeded), `vault_products`
-   (4 honest vaults seeded), `profiles` (username/phone/referral validation
+   (honest vaults seeded), `profiles` (username/phone/referral validation
    via the `app_handle_new_user` auth trigger), append-only `ledger`,
-   `reserve` + `reserve_entries`, `vault_cycles` (rate snapshot +
-   `promised_yield` per cycle), `deposits`/`withdrawals` queues,
-   `payment_events`, RLS on everything.
+   `vault_cycles` (rate snapshot + `promised_yield` per cycle),
+   `deposits`/`withdrawals` queues, `payment_events`, RLS on everything.
+   There is no reserve table — the backing float lives in Shashura.
 2. **`rpc.sql`** — member RPCs: `app_dashboard`, `app_open_vault`,
    `app_exit_vault`, `app_open_deposit`, `app_open_withdrawal`, `app_team`,
-   `app_public_info`, plus the solvency gate (`app_obligations`,
-   `app_coverage`, `app_assert_solvent`) that every promise passes through.
+   `app_public_info`. `app_obligations()` reports member liability (wallets +
+   open-vault payouts) to the admin desk; there is no coverage ratio or
+   solvency gate because the backing float is external and not mirrored here.
    `app_settle_matured()` is the idempotent cron body. Clock rules go through
    `app_clock()` (wall clock in the `timezone` setting), the withdrawal window
    gate is `app_assert_withdrawal_window()`, and promo credits go through
-   `app_promo_credit()` — exempt from the solvency gate, mirrored into the
-   reserve as a non-cash `promo_overlay` entry so published coverage stays true
-   and the overlay stays undrawable.
+   `app_promo_credit()` — a plain, idempotent wallet credit.
 3. **`admin.sql`** — operator layer: `app_admin_guard()` (membership in the
    `admins` table **is** admin) + `app_admin_log()` audit in every mutation;
    settlement (`app_admin_confirm_deposit` / `reject_deposit` /
-   `pay_withdrawal` / `fail_withdrawal`), reserve
-   (`app_admin_topup_reserve` / `app_admin_draw_reserve` — draws below 100%
-   coverage are refused), products, settings whitelist, wallet corrections,
-   bans, grants by **username**.
+   `pay_withdrawal` / `fail_withdrawal`), products, settings whitelist, wallet
+   corrections, bans, grants by **username**. There is no reserve top-up/draw
+   RPC — that money moves through Shashura, outside the app.
    Bootstrap the first operators: put their usernames in the array in the
    `do $$` block at the bottom and re-run (idempotent; skipped once any admin
    exists).
@@ -136,7 +135,7 @@ Uniform envelope `{ data } | { error: { code, message } }`.
 | `POST /api/vaults/open` · `/exit` | `app_open_vault` / `app_exit_vault` | member |
 | `POST /api/deposits` · `/withdrawals` | `app_open_deposit` / `app_open_withdrawal` | member |
 | `POST /api/settle` | `app_settle_matured` | `Bearer $CRON_SECRET` (service-role) |
-| `/api/admin/*` (self, dashboard, queue, settle, reserve, members, products, settings, admins, audit) | `app_admin_*` | admin (guard in SQL) |
+| `/api/admin/*` (self, dashboard, queue, settle, members, products, settings, admins, audit) | `app_admin_*` | admin (guard in SQL) |
 
 Scheduling: point a Vercel Cron (or any timer) at
 `POST /api/settle` with `Authorization: Bearer $CRON_SECRET` — daily near
@@ -144,14 +143,13 @@ the `settlement_hour` setting. The service-role key is used **only** there.
 
 ## Screens
 
-- `/` — branded welcome (live coverage + fee + catalogue via anon RPC)
+- `/` — branded welcome (fee + catalogue via anon RPC)
 - `/register` · `/login` — username-based auth
 - `/app` — member desk: Vaults (catalogue, open with preview, cycles, early
   exit) · Money (deposit/withdraw queues) · History (own ledger) · Refer
-- `/admin` — ops desk: Overview (coverage first) · **Queues** (settlement
-  workbench) · **Reserve** (top-up/draw with headroom guard) · Members ·
-  Vaults (products) · Settings (money rules, whitelisted keys) · Admins ·
-  Audit
+- `/admin` — ops desk: Overview (obligations + queues) · **Queues** (settlement
+  workbench) · Members · Vaults (products) · Settings (money rules, whitelisted
+  keys) · Admins · Audit
 
 ## Money-rule sync rule
 
@@ -189,5 +187,5 @@ npm run build ; npm run lint
   redirect base and `metadataBase`, so a stale value ships share cards that
   point at the wrong site.
 - Point the merchant line in the deposit copy at a real receivable account.
-- Rates: keep total-over-term honest; the reserve gate means growth is
-  bounded by real funded capital — that is the intended trade-off.
+- Rates: keep total-over-term honest; growth is bounded by the operator's
+  externally funded reserve — that is the intended trade-off.

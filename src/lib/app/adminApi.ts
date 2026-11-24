@@ -10,7 +10,6 @@ import type {
   AdminProductRow,
   AdminQueueDepositRow,
   AdminQueueWithdrawalRow,
-  AdminReserveResult,
   AdminSettingSpec,
 } from "@/lib/api/types";
 
@@ -61,11 +60,6 @@ export const adminAdjustWallet = (userId: string, delta: number, reason: string,
 
 export const adminSetBan = (userId: string, banned: boolean, reason: string, cfg: ApiConfig = {}) =>
   apiRequest("/admin/members/ban", post({ userId, banned, reason }), cfg);
-
-export const adminReserve = (
-  input: { action: "topup" | "draw"; amount: number; reference: string; note?: string },
-  cfg: ApiConfig = {}
-) => apiRequest<AdminReserveResult>("/admin/reserve", post(input), cfg);
 
 export const adminListProducts = (cfg: ApiConfig = {}) =>
   apiRequest<AdminProductRow[]>("/admin/products", { method: "GET" }, cfg);

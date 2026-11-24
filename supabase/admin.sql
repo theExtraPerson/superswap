@@ -5,14 +5,15 @@
 -- routes never decide authorization.
 --
 -- Settlement (MVP rails): deposits/withdrawals queue up; the operator moves
--- real money off-platform, then confirms here. Confirmation is idempotent
--- (payment_events + ledger idem keys) and keeps the reserve in lockstep:
---   confirm deposit  -> wallet +amount, reserve +amount (declared received)
---   pay withdrawal   -> reserve -payout, +fee income
---   open vault       -> reserve must already cover the promise (rpc.sql gate)
---   withdrawal       -> BLOCKED while coverage < 100%
---   promos (welcome bonus, L1 commission) -> overlay-funded and gate-exempt,
---                  always through app_promo_credit so coverage stays honest
+-- real money off-platform (or through Shashura), then confirms here. Every
+-- confirmation is idempotent (payment_events + ledger idem keys):
+--   confirm deposit  -> wallet +amount
+--   pay withdrawal   -> the payout settles off-platform; fee is platform revenue
+--   promos (welcome bonus, referral commission) -> credited through
+--                  app_promo_credit
+-- The float that backs member promises lives in the external Shashura account;
+-- the application never mirrors or gates against it, so no reserve balance or
+-- coverage ratio is tracked here.
 -- Shashura gateway rails ride the SAME settlement cores as the manual ones:
 -- a confirmed collection CREDITS ITSELF (deposits are automatic — the admin
 -- Confirm survives only as the bank/off-platform fallback), while a payout
@@ -112,21 +113,16 @@ begin
       'open_principal', (select coalesce(sum(principal), 0) from vault_cycles where status = 'open'),
       'open_promised_yield', (select coalesce(sum(promised_yield), 0) from vault_cycles where status = 'open'),
       'obligations', app_obligations(),
-      'reserve_balance', (select balance from reserve where id = 1),
-      'coverage_pct', app_coverage(),
       'pending_deposits', (select count(*) from deposits where status = 'pending'),
       'pending_deposits_total', (select coalesce(sum(amount), 0) from deposits where status = 'pending'),
       'pending_withdrawals', (select count(*) from withdrawals where status = 'pending'),
       'pending_withdrawals_total', (select coalesce(sum(payout_amount), 0) from withdrawals where status = 'pending'),
       'deposits_total', (select coalesce(sum(amount), 0) from deposits where status = 'confirmed'),
       'withdrawals_total', (select coalesce(sum(payout_amount), 0) from withdrawals where status = 'paid'),
-      'fees_total', (select coalesce(sum(amount), 0) from reserve_entries where kind = 'fee_income'),
+      'fees_total', (select coalesce(sum(fee_amount), 0) from withdrawals where status = 'paid'),
       'bonus_total', (select coalesce(sum(amount), 0) from ledger where kind = 'bonus_credit'),
       'referral_commission_total', (select coalesce(sum(amount), 0) from ledger where kind = 'referral_reward'),
-      'promo_overlay_total', (select coalesce(sum(amount), 0) from reserve_entries where kind = 'promo_overlay'),
-      'yield_paid_total', (select coalesce(sum(promised_yield), 0) from vault_cycles where status = 'closed'),
-      'reserve_topped_total', (select coalesce(sum(amount), 0) from reserve_entries where kind = 'reserve_credit'),
-      'reserve_drawn_total', (select coalesce(sum(-amount), 0) from reserve_entries where kind = 'reserve_debit')
+      'yield_paid_total', (select coalesce(sum(promised_yield), 0) from vault_cycles where status = 'closed')
     ),
     'members', (
       select coalesce(jsonb_agg(to_jsonb(p) order by p.created_at desc), '[]'::jsonb)
@@ -221,11 +217,11 @@ end $$;
 -- Deposits are AUTOMATIC: a Shashura collection credits itself through
 -- app_deposit_credited_core when the signed webhook confirms. The admin
 -- Confirm below is the human fallback for bank/off-platform transfers —
--- both paths share ONE core: wallet +amount, reserve +cash-that-really-
--- landed (net of the gateway charge), L1 commission overlay-funded, all
--- idempotent per deposit id.
+-- both paths share ONE core: wallet +amount and L1/L2 referral commission,
+-- all idempotent per deposit id. The float that backs member money lives in
+-- the external Shashura account and is never mirrored into the app.
 -- ----------------------------------------------------------------------------
-create or replace function app_deposit_credited_core(p_deposit_id bigint, p_note text, p_source text, p_actor uuid, p_reserve_amount numeric default null) returns jsonb
+create or replace function app_deposit_credited_core(p_deposit_id bigint, p_note text, p_source text, p_actor uuid) returns jsonb
 language plpgsql security definer set search_path = public as $$
 declare
   v_dep deposits;
@@ -235,8 +231,6 @@ declare
   v_comm_l2_pct numeric := app_setting_num('referral_commission_l2_percent', 1);
   v_commission numeric(16,2) := 0;
   v_commission_l2 numeric(16,2) := 0;
-  v_cash numeric;
-  v_new_balance numeric;
 begin
   select * into v_dep from deposits where id = p_deposit_id for update;
   if not found then raise exception 'NOT_FOUND: Deposit not found.'; end if;
@@ -245,7 +239,6 @@ begin
   end if;
 
   -- The status transition (guarded by the row lock) is the replay guard.
-  v_cash := coalesce(p_reserve_amount, v_dep.amount);
   update deposits set status = 'confirmed', settled_at = now(), settled_by = p_actor,
          gateway_state = case when p_source = 'shashura' then 'verified' else gateway_state end,
          gateway_detail = case when p_source = 'shashura' then null else gateway_detail end,
@@ -261,24 +254,16 @@ begin
   values (app_hash_sha256(p_source || ':deposit:' || p_deposit_id), p_source, 'deposit.confirmed', to_jsonb(v_dep))
   on conflict (sha256_hash) do nothing;
 
-  -- Wallet credit (member's money has arrived)...
+  -- Wallet credit (member's money has arrived). The backing float is held in
+  -- the external Shashura account, which the app never mirrors — so there is
+  -- no reserve to declare into here.
   perform app_credit(v_dep.user_id, v_dep.amount, 'deposit_credit', 'deposits', v_dep.id,
                      'Deposit ' || v_dep.channel, 'dep_credit:' || v_dep.id);
-  -- ...and ONLY the cash that really landed is declared into the reserve —
-  -- the gateway's processing fee never counts as covered cash, so coverage
-  -- stays honest on the automatic path.
-  update reserve set balance = balance + v_cash, updated_at = now()
-    where id = 1 returning balance into v_new_balance;
-  insert into reserve_entries (amount, kind, balance_after, reference, note, actor_user_id, idem_key)
-  values (v_cash, 'reserve_credit', v_new_balance, coalesce(v_dep.reference, v_dep.gateway_ref),
-          'Deposit ' || v_dep.id || ' received via ' || p_source, p_actor, 'dep_reserve:' || v_dep.id);
 
   -- Referral commission, two generations, on THIS deposit:
   --   L1 (referral_commission_percent) -> the direct referrer,
   --   L2 (referral_commission_l2_percent) -> the referrer's own referrer.
-  -- Promo money: exempt from the solvency gate and overlay-funded inside
-  -- app_promo_credit (see rpc.sql). The idem keys make replay impossible, even
-  -- if this deposit is settled twice.
+  -- The idem keys make replay impossible, even if this deposit is settled twice.
   select referred_by into v_referrer from profiles where user_id = v_dep.user_id;
   if coalesce(v_comm_pct, 0) > 0 and v_referrer is not null then
     v_commission := round(v_dep.amount * v_comm_pct / 100, 2);
@@ -308,8 +293,7 @@ begin
                              else '' end);
   return jsonb_build_object('deposit', to_jsonb(v_dep), 'credited', v_dep.amount,
                             'commission_percent', v_comm_pct, 'commission', v_commission,
-                            'commission_l2_percent', v_comm_l2_pct, 'commission_l2', v_commission_l2,
-                            'coverage_pct', app_coverage());
+                            'commission_l2_percent', v_comm_l2_pct, 'commission_l2', v_commission_l2);
 end $$;
 
 create or replace function app_admin_confirm_deposit(p_deposit_id bigint, p_note text default null) returns jsonb
@@ -317,7 +301,7 @@ language plpgsql security definer set search_path = public as $$
 declare
   v_uid uuid := app_admin_guard();
 begin
-  return app_deposit_credited_core(p_deposit_id, p_note, 'manual', v_uid, null);
+  return app_deposit_credited_core(p_deposit_id, p_note, 'manual', v_uid);
 end $$;
 
 create or replace function app_admin_reject_deposit(p_deposit_id bigint, p_reason text) returns jsonb
@@ -344,13 +328,12 @@ end $$;
 -- becomes paid/failed. Called by the guarded admin functions AND by
 -- app_hook_shashura (service-role webhook), so manual and gateway settlement
 -- can never drift apart. The status transition under the row lock is the
--- replay guard; idem keys on ledger/reserve writes back it up.
+-- replay guard; idem keys on the ledger/payment writes back it up.
 -- ----------------------------------------------------------------------------
 create or replace function app_withdrawal_paid_core(p_withdrawal_id bigint, p_reference text, p_source text, p_actor uuid) returns jsonb
 language plpgsql security definer set search_path = public as $$
 declare
   v_wd withdrawals;
-  v_new_balance numeric;
 begin
   select * into v_wd from withdrawals where id = p_withdrawal_id for update;
   if not found then raise exception 'NOT_FOUND: Withdrawal not found.'; end if;
@@ -373,20 +356,9 @@ begin
   values (app_hash_sha256(p_source || ':withdrawal:' || p_withdrawal_id), p_source, 'withdrawal.paid', to_jsonb(v_wd))
   on conflict (sha256_hash) do nothing;
 
-  -- Cash actually leaves the operator float now.
-  update reserve set balance = greatest(0, balance - v_wd.payout_amount), updated_at = now()
-    where id = 1 returning balance into v_new_balance;
-  insert into reserve_entries (amount, kind, balance_after, reference, note, actor_user_id, idem_key)
-  values (-v_wd.payout_amount, 'reserve_debit', v_new_balance, p_reference,
-          'Withdrawal ' || v_wd.id || ' paid', p_actor, 'wd_pay:' || v_wd.id);
-
-  if v_wd.fee_amount > 0 then
-    update reserve set balance = balance + v_wd.fee_amount, updated_at = now()
-      where id = 1 returning balance into v_new_balance;
-    insert into reserve_entries (amount, kind, balance_after, reference, note, actor_user_id, idem_key)
-    values (v_wd.fee_amount, 'fee_income', v_new_balance, null,
-            'Fee from withdrawal ' || v_wd.id, p_actor, 'wd_fee:' || v_wd.id);
-  end if;
+  -- The payout leaves the external Shashura float and the fee is platform
+  -- revenue; both settle off-platform. The app records the queue transition,
+  -- the payment event and the audit row — never an in-app reserve balance.
 
   perform app_admin_log('pay_withdrawal', v_wd.id::text,
                         v_wd.payout_amount || ' UGX to ' || v_wd.user_id || ' via ' || p_source);
@@ -601,14 +573,12 @@ begin
         perform app_admin_log('shashura_amount_mismatch', v_dep.id::text, v_dep.gateway_detail);
         return jsonb_build_object('deposit', to_jsonb(v_dep), 'needs_admin_review', true);
       end if;
-      -- Deposits settle AUTOMATICALLY: the same credited core the admin
-      -- Confirm uses. Only cash that really landed (net of the gateway
-      -- charge) funds the reserve, so coverage stays honest.
+      -- Deposits settle AUTOMATICALLY: the same credited core the admin Confirm
+      -- uses. The gateway already moved the real cash into the external
+      -- Shashura account; the app only credits the member's wallet.
       perform app_admin_log('shashura_collection_settled', v_dep.id::text,
                             v_dep.amount || ' UGX auto-credited (' || coalesce(v_dep.gateway_ref, v_ref) || ')');
-      return app_deposit_credited_core(v_dep.id, null, 'shashura', null,
-             case when v_net is not null and v_amt is not null and v_net <= v_amt
-                  then v_net else null end);
+      return app_deposit_credited_core(v_dep.id, null, 'shashura', null);
     end if;
     update deposits set gateway_state = 'failed', gateway_detail = left(coalesce(v_detail, 'declined'), 300)
       where id = v_dep.id returning * into v_dep;
@@ -635,50 +605,6 @@ begin
       coalesce(v_detail, 'Payout declined by Shashura'), 'shashura', null);
   end if;
   return jsonb_build_object('ignored', true, 'reason', 'unknown type');
-end $$;
-
--- ----------------------------------------------------------------------------
--- Reserve operations
--- ----------------------------------------------------------------------------
-create or replace function app_admin_topup_reserve(p_amount numeric, p_reference text, p_note text default null) returns jsonb
-language plpgsql security definer set search_path = public as $$
-declare
-  v_uid uuid := app_admin_guard();
-  v_new numeric;
-begin
-  if p_amount <= 0 then raise exception 'INVALID_AMOUNT: Top-up must be positive.'; end if;
-  if coalesce(trim(p_reference), '') = '' then
-    raise exception 'INVALID_REQUEST: A bank/momo reference is required for reserve top-ups.';
-  end if;
-  update reserve set balance = balance + p_amount, updated_at = now()
-    where id = 1 returning balance into v_new;
-  insert into reserve_entries (amount, kind, balance_after, reference, note, actor_user_id)
-  values (p_amount, 'reserve_credit', v_new, trim(p_reference), p_note, v_uid);
-  perform app_admin_log('reserve_topup', null, p_amount || ' UGX ref ' || p_reference);
-  return jsonb_build_object('balance', v_new, 'coverage_pct', app_coverage());
-end $$;
-
-create or replace function app_admin_draw_reserve(p_amount numeric, p_reference text) returns jsonb
-language plpgsql security definer set search_path = public as $$
-declare
-  v_uid uuid := app_admin_guard();
-  v_new numeric;
-begin
-  if p_amount <= 0 then raise exception 'INVALID_AMOUNT: Draw must be positive.'; end if;
-  if coalesce(trim(p_reference), '') = '' then
-    raise exception 'INVALID_REQUEST: A reference is required for reserve draws.';
-  end if;
-  -- The operator may only take what is NOT promised to members.
-  if p_amount > (select balance from reserve where id = 1) - app_obligations() then
-    raise exception 'INVALID_REQUEST: Draw would push coverage below 100%. Reserve free: %.',
-      greatest(0, (select balance from reserve where id = 1) - app_obligations());
-  end if;
-  update reserve set balance = balance - p_amount, updated_at = now()
-    where id = 1 returning balance into v_new;
-  insert into reserve_entries (amount, kind, balance_after, reference, note, actor_user_id)
-  values (-p_amount, 'reserve_debit', v_new, trim(p_reference), null, v_uid);
-  perform app_admin_log('reserve_draw', null, p_amount || ' UGX ref ' || p_reference);
-  return jsonb_build_object('balance', v_new, 'coverage_pct', app_coverage());
 end $$;
 
 -- ----------------------------------------------------------------------------
@@ -826,8 +752,6 @@ begin
     raise exception 'INVALID_REQUEST: A written reason is required (audit trail).';
   end if;
   if p_delta > 0 then
-    -- Even gifts must be reserved before they are given.
-    perform app_assert_solvent(p_delta);
     v_new := app_credit(p_user_id, p_delta, 'adjustment_credit', null, null, left(trim(p_reason), 200));
   else
     v_new := app_debit(p_user_id, -p_delta, 'adjustment_debit', null, null, left(trim(p_reason), 200));
@@ -930,8 +854,6 @@ grant execute on function app_admin_list_products() to authenticated;
 grant execute on function app_admin_upsert_product(jsonb) to authenticated;
 grant execute on function app_admin_setting_spec() to authenticated;
 grant execute on function app_admin_set_setting(text, text) to authenticated;
-grant execute on function app_admin_topup_reserve(numeric, text, text) to authenticated;
-grant execute on function app_admin_draw_reserve(numeric, text) to authenticated;
 grant execute on function app_admin_confirm_deposit(bigint, text) to authenticated;
 grant execute on function app_admin_reject_deposit(bigint, text) to authenticated;
 grant execute on function app_admin_pay_withdrawal(bigint, text) to authenticated;
@@ -941,7 +863,7 @@ grant execute on function app_member_shashura_collect(bigint, text, text) to aut
 grant execute on function app_admin_shashura_disburse(bigint, text, text, text) to authenticated;
 -- Settlement cores are internal: reachable only through the guarded wrappers
 -- and the service-role webhook, never directly from a user session.
-revoke all on function app_deposit_credited_core(bigint, text, text, uuid, numeric) from public, anon, authenticated;
+revoke all on function app_deposit_credited_core(bigint, text, text, uuid) from public, anon, authenticated;
 revoke all on function app_withdrawal_paid_core(bigint, text, text, uuid) from public, anon, authenticated;
 revoke all on function app_withdrawal_failed_core(bigint, text, text, uuid) from public, anon, authenticated;
 -- Webhook funnel: the callback route has no member session, so only the

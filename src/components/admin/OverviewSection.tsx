@@ -1,27 +1,21 @@
 "use client";
 
 import { Card, Stat } from "@/components/ui";
-import { fmtPct, fmtUGX } from "@/lib/format";
+import { fmtUGX } from "@/lib/format";
 import type { DeskApi } from "./useDesk";
 
-/** Metrics — the solvency truth an operator watches. Coverage is ALSO
- *  published to members (app_dashboard); there is no second set of books. */
+/** Metrics — the platform truth an operator watches. The reserve that backs
+ *  payouts lives in the external Shashura account and is never mirrored here,
+ *  so there is no coverage figure; obligations is the member liability we DO
+ *  control. */
 export function OverviewSection({ desk }: { desk: DeskApi }) {
   const m = desk.dash?.metrics;
   if (!m) return null;
-  const coverage = Number(m.coverage_pct);
   const paused = desk.dash?.settings?.platform_paused === "true";
   return (
     <div className="space-y-4">
       <Card title="Platform" hint="Everything below is aggregated in one app_admin_dashboard() round-trip.">
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
-          <Stat
-            label="Reserve coverage"
-            value={fmtPct(coverage)}
-            tone={coverage >= 100 ? "good" : "bad"}
-            sub="must stay ≥ 100%"
-          />
-          <Stat label="Reserve" value={fmtUGX(m.reserve_balance)} sub="operator float + promo overlay" />
           <Stat label="Obligations" value={fmtUGX(m.obligations)} sub="wallets + promised payouts" />
           <Stat label="Wallets" value={fmtUGX(m.wallets_total)} />
           <Stat
@@ -50,14 +44,7 @@ export function OverviewSection({ desk }: { desk: DeskApi }) {
             value={fmtUGX(Number(m.bonus_total ?? 0) + Number(m.referral_commission_total ?? 0))}
             sub={`welcome bonus ${fmtUGX(m.bonus_total ?? 0)} · L1 commission ${fmtUGX(m.referral_commission_total ?? 0)}`}
           />
-          <Stat
-            label="Reserve overlay"
-            value={fmtUGX(m.promo_overlay_total ?? 0)}
-            sub="non-cash promo funding — never drawable"
-          />
           <Stat label="Fee income" value={fmtUGX(m.fees_total)} tone="gold" />
-          <Stat label="Reserve topped up" value={fmtUGX(m.reserve_topped_total)} />
-          <Stat label="Reserve drawn" value={fmtUGX(m.reserve_drawn_total)} />
         </div>
       </Card>
       <Card title="Platform switch" hint="platform_paused blocks every money movement RPC; reads keep working. Edit on the Settings tab.">

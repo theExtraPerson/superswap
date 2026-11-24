@@ -4,9 +4,9 @@ import type { CycleRow } from "@/lib/api/types";
 
 /**
  * POST /api/vaults/open — { productId, principal, idemKey? }
- * All checks live in app_open_vault: running/window gates, product range,
- * wallet funds — and THE GATE: the promised yield must be covered by the
- * reserve before the vault can exist (INSUFFICIENT_RESERVE otherwise).
+ * All checks live in app_open_vault: running/window gates, product range
+ * and wallet funds. The promised yield is funded from the external Shashura
+ * reserve, so there is no in-app coverage gate on opening a vault.
  */
 export async function POST(req: Request) {
   await connection(); // per-request under cacheComponents; never prerendered

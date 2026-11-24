@@ -12,7 +12,7 @@ const CHANNELS = new Set(["momo"]);
  * POST /api/deposits — { amount, channel, payerAccount, reference?, idemKey? }
  * Opens a deposit and makes it AUTOMATIC: the same call pushes a Shashura
  * requestToPay PIN prompt to the payer number, and the signed webhook credits
- * wallet + reserve through the shared deposit core (app_hook_shashura). The
+ * the wallet through the shared deposit core (app_hook_shashura). The
  * member never waits on an operator. When the gateway is down/unconfigured the
  * row stays pending for the admin desk fallback. Rules live in app_open_deposit;
  * the collection is only recorded under the member's identity via

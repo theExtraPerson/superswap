@@ -4,7 +4,7 @@ import type { DashboardPayload } from "@/lib/api/types";
 
 /**
  * GET /api/dashboard — the whole member desk in one round-trip:
- * profile, rules, live reserve transparency, vault catalogue, my cycles,
+ * profile, rules, vault catalogue, my cycles,
  * my deposit/withdrawal queues, my ledger (app_dashboard).
  */
 export async function GET(req: Request) {

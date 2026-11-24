@@ -4,7 +4,7 @@ import type { AdminDashboardPayload } from "@/lib/api/types";
 
 /**
  * GET /api/admin/dashboard?q= — the whole desk in one round-trip
- * (metrics incl. reserve coverage, member search, roster, settings, audit).
+ * (metrics, member search, roster, settings, audit).
  * Authorization is app_admin_guard() inside the RPC → 403 for non-admins.
  */
 export async function GET(req: Request) {

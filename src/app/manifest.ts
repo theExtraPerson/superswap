@@ -6,7 +6,7 @@ export default function manifest(): MetadataRoute.Manifest {
     name: `${brand.name} — Term savings with reserved yield`,
     short_name: brand.name,
     description:
-      "UGX term-savings vaults with fixed, fully-reserved yield. Every promise is covered by the reserve before it is made — and the coverage number is public.",
+      "UGX term-savings vaults with fixed yield. Every payout is funded in advance from the operator's reserve, held securely with our licensed payment provider.",
     id: "/",
     start_url: "/app",
     scope: "/",

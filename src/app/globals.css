@@ -247,7 +247,7 @@ body {
   letter-spacing: 0.02em;
 }
 
-/* Progress bar (VIP maturity gauge, reserve coverage strips) */
+/* Progress bar (VIP maturity gauge) */
 .progress {
   height: 8px;
   border-radius: 999px;

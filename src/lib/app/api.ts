@@ -1,5 +1,5 @@
 // Typed member-side client for the /api routes. Every rule (minimums, fees,
-// windows, the reserve gate) is enforced inside app_* RPCs — this module is
+// windows) is enforced inside app_* RPCs — this module is
 // plumbing, never policy.
 
 import { apiRequest, post, type ApiConfig } from "@/lib/api/client";

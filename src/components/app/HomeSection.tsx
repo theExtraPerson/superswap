@@ -1,10 +1,10 @@
 "use client";
 
 // Home tab — the desk's front page, structured like the reference app:
-// wallet hero with live coverage, a sliding highlights carousel, the daily
-// check-in strip (app_checkin, overlay-funded), quick-action orbs and a
-// recent-activity feed. Every number still comes from app_dashboard; the
-// claim rides /api/checkin → Postgres. Nothing here decides money.
+// wallet hero, a sliding highlights carousel, the daily check-in strip
+// (app_checkin), quick-action orbs and a recent-activity feed. Every number
+// still comes from app_dashboard; the claim rides /api/checkin → Postgres.
+// Nothing here decides money.
 
 import { useEffect, useRef, useState, type JSX } from "react";
 import { dailyCheckin } from "@/lib/app/api";
@@ -24,31 +24,16 @@ import type { MemberDeskApi } from "./useMemberDesk";
 
 export function HomeSection({ desk, go }: { desk: MemberDeskApi; go: (tab: DeskTab) => void }) {
   const d = desk.data!;
-  const coverageOk = Number(d.transparency.coverage_pct) >= 100;
 
   return (
     <div className="flex flex-col gap-4">
-      {/* Wallet hero — balance + the coverage promise, one glance */}
+      {/* Wallet hero — the member's balance, one glance */}
       <section className="hero-wallet p-5">
         <div className="text-[11px] uppercase tracking-wide text-white/70">Wallet balance</div>
         <div className="money-hero mt-1 text-white">{fmtUGX(d.profile.wallet_balance)}</div>
         <button onClick={() => void desk.reload()} className="mt-2 text-[11px] text-white/70 hover:text-white">
           ↻ refresh
         </button>
-        <div className="mt-3">
-          <div className="flex items-center justify-between text-[11px] text-white/80">
-            <span>Reserve coverage</span>
-            <span className="font-bold">{fmtPct(d.transparency.coverage_pct)}</span>
-          </div>
-          <div className="progress mt-1.5 !bg-black/25 !border-white/15">
-            <span style={{ width: `${Math.min(100, Number(d.transparency.coverage_pct) || 0)}%` }} />
-          </div>
-          <div className="mt-1.5 text-[10.5px] text-white/70 leading-snug">
-            {coverageOk
-              ? "Every promised payout is fully funded in advance."
-              : "Coverage is short — money movement is blocked until the reserve is topped up."}
-          </div>
-        </div>
       </section>
 
       <Highlights desk={desk} />
@@ -110,11 +95,6 @@ function Highlights({ desk }: { desk: MemberDeskApi }) {
           : `You earn ${fmtPct(pct)} on every deposit the members you brought in make, credited when it is confirmed.`,
       Icon: IconTeam,
     });
-  slides.push({
-    title: `Reserve coverage ${fmtPct(d.transparency.coverage_pct)}`,
-    body: `Real reserve ${fmtUGX(d.transparency.reserve_balance)} against ${fmtUGX(d.transparency.obligations)} of promises. Watch it live — it never drops below 100%.`,
-    Icon: IconVault,
-  });
   const windowLabel = fmtWindow(d.rules.withdraw_window_from, d.rules.withdraw_window_to, d.rules.timezone);
   slides.push({
     title: "Withdrawals open daily",

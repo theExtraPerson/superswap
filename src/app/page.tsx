@@ -2,15 +2,15 @@ import Link from "next/link";
 import { connection } from "next/server";
 import { anonClient } from "@/lib/api/respond";
 import { brand } from "@/lib/brand";
-import { fmtPct, fmtRate, fmtUGX } from "@/lib/format";
+import { fmtRate, fmtUGX } from "@/lib/format";
 import { InstallTile } from "@/components/InstallTile";
 import { BrandMark } from "@/components/ui";
 import type { PublicInfoPayload } from "@/lib/api/types";
 
 /**
- * / — branded welcome screen (server render; live rates + coverage come from
+ * / — branded welcome screen (server render; live rates come from
  * the public RPC so marketing copy can never drift from the running rules).
- * The whole page is runtime data (coverage is live), so it opts out of
+ * The whole page is runtime data, so it opts out of
  * instant static rendering under cacheComponents.
  */
 export const instant = false;
@@ -26,7 +26,6 @@ export default async function Home() {
   }
 
   const paused = info?.rules?.platform_paused === true;
-  const coverage = info ? fmtPct(info.coverage_pct) : null;
   const signupBonus = Number(info?.rules?.signup_bonus ?? 0);
   const minDeposit = Number(info?.rules?.min_deposit ?? 0);
 
@@ -39,11 +38,6 @@ export default async function Home() {
           </h1>
           <p className="text-[#c3cfe4] text-sm font-medium">{brand.tagline}</p>
           <p className="text-[11px] text-[#92a0b9] leading-relaxed max-w-[34ch]">{brand.promise}</p>
-          {coverage && (
-            <span className="pill bg-emerald-500/15 text-emerald-300 mt-1">
-              Live reserve coverage {coverage}
-            </span>
-          )}
         </header>
 
         <div className="flex flex-col gap-3">

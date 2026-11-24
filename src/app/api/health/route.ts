@@ -6,7 +6,7 @@ import { anonClient, ok, fail } from "@/lib/api/respond";
  */
 export async function GET() {
   await connection(); // per-request under cacheComponents; never prerendered
-  const { data, error } = await anonClient().rpc("app_coverage");
+  const { data, error } = await anonClient().rpc("app_obligations");
   if (error) return fail(500, "INTERNAL", "Database unreachable.");
-  return ok({ ok: true, coverage_pct: data });
+  return ok({ ok: true, obligations: data });
 }

@@ -72,12 +72,6 @@ export interface CheckinResult {
   wallet_balance: number | string;
 }
 
-export interface TransparencyPayload {
-  reserve_balance: number | string;
-  obligations: number | string;
-  coverage_pct: number | string;
-}
-
 export interface ProductRow {
   id?: number;
   slug: string;
@@ -167,7 +161,6 @@ export interface DashboardPayload {
   profile: ProfileRow;
   is_banned: boolean;
   rules: RulesPayload;
-  transparency: TransparencyPayload;
   /** Absent on a live DB that predates the daily-check-in migration. */
   checkin?: CheckinState;
   products: ProductRow[];
@@ -180,7 +173,6 @@ export interface DashboardPayload {
 export interface PublicInfoPayload {
   rules: RulesPayload;
   products: ProductRow[];
-  coverage_pct: number | string;
 }
 
 export interface TeamPayload {
@@ -222,8 +214,6 @@ export interface AdminMetrics {
   open_principal: number | string;
   open_promised_yield: number | string;
   obligations: number | string;
-  reserve_balance: number | string;
-  coverage_pct: number | string;
   pending_deposits: number;
   pending_deposits_total: number | string;
   pending_withdrawals: number;
@@ -233,10 +223,7 @@ export interface AdminMetrics {
   fees_total: number | string;
   bonus_total: number | string;
   referral_commission_total: number | string;
-  promo_overlay_total: number | string;
   yield_paid_total: number | string;
-  reserve_topped_total: number | string;
-  reserve_drawn_total: number | string;
 }
 
 export interface AdminMemberRow {
@@ -319,9 +306,4 @@ export interface AdminSettingSpec {
 export interface AdminGrantResult {
   status: "granted" | "queued";
   handle: string;
-}
-
-export interface AdminReserveResult {
-  balance: number | string;
-  coverage_pct: number | string;
 }

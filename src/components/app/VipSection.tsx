@@ -90,8 +90,8 @@ export function VipSection({ desk }: { desk: MemberDeskApi }) {
         <section className="card-grad p-4 text-center">
           <div className="text-sm font-bold">No active plan yet</div>
           <p className="text-[11px] text-[#92a0b9] mt-1">
-            Pick a term below. Your wallet must hold the principal, and the reserve must already
-            cover the promise before the app lets you open it.
+            Pick a term below. Your wallet must hold the principal, and the rate
+            locks the moment you open.
           </p>
         </section>
       )}
@@ -185,8 +185,7 @@ export function VipSection({ desk }: { desk: MemberDeskApi }) {
             {desk.busy ? "Opening…" : "Open plan (rate locks now)"}
           </button>
           <p className="text-[10px] text-[#92a0b9] leading-relaxed">
-            Your wallet must hold the principal. The app refuses to open any plan whose promised
-            yield is not already covered by the public reserve.
+            Your wallet must hold the principal. The rate locks the moment you open the plan.
           </p>
         </section>
       )}

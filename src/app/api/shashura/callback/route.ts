@@ -9,8 +9,8 @@ import { shashuraWebhookConfigured, verifyWebhookSignature } from "@/lib/shashur
  * the app's webhook secret, compared before the payload is even parsed.
  *
  * The payload then runs through app_hook_shashura (service-role):
- *   COLLECTION success  -> deposit CREDITS ITSELF (wallet + reserve at net
- *                          cash) through the same core as the admin Confirm;
+ *   COLLECTION success  -> deposit CREDITS ITSELF (wallet at the amount
+ *                          received) through the same core as the admin Confirm;
  *                          only an amount mismatch is held back for review.
  *   DISBURSEMENT success-> withdrawal settled automatically (the "api"
  *                          option the admin chose on the desk).

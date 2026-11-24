@@ -7,9 +7,9 @@ const CHANNELS = new Set(["momo"]);
 
 /**
  * POST /api/withdrawals — { amount, channel, destinationAccount, idemKey? }
- * Debits the wallet at request time (funds become reserved) and queues the
- * payout for operator settlement. Fee + minimums enforced inside
- * app_open_withdrawal — and the RPC refuses while reserve coverage is short.
+ * Debits the wallet at request time (the balance is held for the payout) and
+ * queues it for operator settlement. Fee + minimums enforced inside
+ * app_open_withdrawal — the payout itself settles against the external Shashura account.
  */
 export async function POST(req: Request) {
   await connection(); // per-request under cacheComponents; never prerendered

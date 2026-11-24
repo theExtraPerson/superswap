@@ -1,8 +1,9 @@
 -- ============================================================================
 -- SuperSwap — member RPC layer (run after schema.sql)
 -- All money movement happens here: SECURITY DEFINER functions, auth.uid()
--- identity only, append-only ledger, client idempotency keys, and the
--- reserve-coverage gate that makes every promised payout a kept promise.
+-- identity only, and an append-only ledger with client idempotency keys.
+-- The float that backs payouts is held in the external Shashura account, which
+-- the application cannot see — there is no in-app reserve to gate against.
 -- ============================================================================
 
 -- ---------------------------------------------------------------- settings
@@ -104,31 +105,17 @@ begin
   return v_row;
 end $$;
 
--- ---------------------------------------------------------------- reserve maths
--- Total member claims the operator float must cover at this instant:
--- cash balances + every open vault's full payout (principal + promised yield).
+-- ---------------------------------------------------------------- member liability
+-- Total member claims outstanding at this instant: cash balances + every open
+-- vault's full payout (principal + promised yield). Reported to the operator as
+-- a liability figure only — the float that backs it lives in the external
+-- Shashura account and is never mirrored into the app, so no coverage ratio or
+-- solvency gate is computed from it.
 create or replace function app_obligations() returns numeric
 language sql stable security definer set search_path = public as $$
   select coalesce((select sum(wallet_balance) from profiles), 0)
        + coalesce((select sum(payout_total) from vault_cycles where status = 'open'), 0)
 $$;
-
-create or replace function app_coverage() returns numeric
-language sql stable security definer set search_path = public as $$
-  select case when app_obligations() = 0 then 100
-    else round(100 * (select balance from reserve where id = 1) / app_obligations(), 2)
-  end
-$$;
-
--- Refuse anything that would take the reserve below 100% coverage.
--- p_new_yield: additional promised yield created by this operation (0 if none).
-create or replace function app_assert_solvent(p_new_yield numeric default 0) returns void
-language plpgsql stable security definer set search_path = public as $$
-begin
-  if (select balance from reserve where id = 1) < app_obligations() + coalesce(p_new_yield, 0) then
-    raise exception 'INSUFFICIENT_RESERVE: The yield reserve cannot cover this promise. The operator must top up the reserve first.';
-  end if;
-end $$;
 
 -- ---------------------------------------------------------------- wallet primitives
 create or replace function app_credit(
@@ -167,13 +154,9 @@ begin
 end $$;
 
 -- ---------------------------------------------------------------- promo credits
--- Marketing promises (sign-up bonus, L1 referral commission) are operator
--- spend rather than member cash-in, so — by product decision — they skip the
--- solvency gate. To keep the published coverage number true, each promo credit
--- is mirrored into the reserve as a non-cash 'promo_overlay' entry: reserve
--- and obligations rise by the same amount, coverage does not move, and the
--- overlay is not free cash (app_admin_draw_reserve measures reserve -
--- obligations, which the overlay leaves unchanged).
+-- Marketing promises (sign-up bonus, check-in reward, referral commission) are
+-- operator spend rather than member cash-in. They credit the wallet through the
+-- same append-only ledger as any other money movement.
 -- Idempotent on p_idem_key: a promo is never paid twice.
 create or replace function app_promo_credit(
   p_user uuid, p_amount numeric, p_kind text,
@@ -181,22 +164,12 @@ create or replace function app_promo_credit(
   p_note text default null, p_idem_key text default null
 ) returns numeric
 language plpgsql security definer set search_path = public as $$
-declare
-  v_reserve numeric;
 begin
   if coalesce(p_amount, 0) <= 0 then return null; end if;
   if p_idem_key is not null
      and exists (select 1 from ledger where idem_key = p_idem_key and kind = p_kind) then
     return null;                                     -- already granted
   end if;
-
-  update reserve set balance = balance + p_amount, updated_at = now()
-    where id = 1 returning balance into v_reserve;
-  insert into reserve_entries (amount, kind, balance_after, reference, note, actor_user_id, idem_key)
-  values (p_amount, 'promo_overlay', v_reserve, null,
-          'Overlay for ' || p_kind || coalesce(' (' || p_note || ')', ''),
-          null, case when p_idem_key is null then null else 'overlay:' || p_idem_key end);
-
   return app_credit(p_user, p_amount, p_kind, p_ref_table, p_ref_id, p_note, p_idem_key);
 end $$;
 
@@ -335,11 +308,6 @@ begin
       'pause_message', app_setting_text('pause_message', ''),
       'support_contact', app_setting_text('support_contact', '')
     ),
-    'transparency', jsonb_build_object(
-      'reserve_balance', (select balance from reserve where id = 1),
-      'obligations', app_obligations(),
-      'coverage_pct', app_coverage()
-    ),
     'checkin', jsonb_build_object(
       'bonus', app_setting_num('checkin_bonus', 100),
       'claimed_today', exists (select 1 from checkin_log
@@ -402,9 +370,6 @@ begin
 
   v_yield := round(p_principal * v_product.total_rate_pct / 100, 2);
   v_payout := p_principal + v_yield;
-
-  -- THE GATE: this exact promise must be funded before it can be made.
-  perform app_assert_solvent(v_yield);
 
   -- Cycle first: its unique idem key is the atomic replay guard.
   insert into vault_cycles (user_id, product_id, product_snapshot, principal, total_rate_pct,
@@ -511,8 +476,9 @@ begin
 end $$;
 
 -- ---------------------------------------------------------------- withdrawals
--- Wallet is debited at REQUEST time (funds are now reserved for the member);
--- operator settlement moves the reserve and records the fee.
+-- Wallet is debited at REQUEST time (the member's funds are locked until the
+-- payout settles); operator settlement completes the payment against the
+-- external Shashura account, and the fee is already captured on the row.
 create or replace function app_open_withdrawal(
   p_amount numeric, p_channel text, p_destination_account text, p_idem_key text default null
 ) returns jsonb
@@ -600,7 +566,6 @@ grant execute on function app_setting_bool(text, boolean) to anon, authenticated
 grant execute on function app_auth_email(text) to anon, authenticated;
 grant execute on function app_username_taken(text) to anon, authenticated;
 grant execute on function app_referral_valid(text) to anon, authenticated;
-grant execute on function app_coverage() to anon;
 grant execute on function app_obligations() to anon;
 grant execute on function app_clock() to anon, authenticated;
 grant execute on function app_clock_label() to anon, authenticated;
@@ -618,7 +583,7 @@ grant execute on function app_settle_matured() to authenticated, service_role;
 grant execute on function app_open_deposit(numeric, text, text, text, text) to authenticated;
 grant execute on function app_open_withdrawal(numeric, text, text, text) to authenticated;
 grant execute on function app_team() to authenticated;
-revoke all on function app_credit, app_debit, app_assert_solvent from public, anon, authenticated;
+revoke all on function app_credit, app_debit from public, anon, authenticated;
 -- Promo plumbing is internal: only the definer functions above may grant a promo.
 revoke all on function app_promo_credit(uuid, numeric, text, text, bigint, text, text)
   from public, anon, authenticated;
@@ -650,8 +615,7 @@ language sql stable security definer set search_path = public as $$
         'max_principal', p.max_principal, 'duration_days', p.duration_days,
         'total_rate_pct', p.total_rate_pct, 'early_exit_percent', p.early_exit_percent,
         'terms', p.terms) order by p.duration_days), '[]'::jsonb)
-      from vault_products p where p.visible and p.active),
-    'coverage_pct', app_coverage()
+      from vault_products p where p.visible and p.active)
   )
 $$;
 grant execute on function app_public_info() to anon, authenticated;

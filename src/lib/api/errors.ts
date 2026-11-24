@@ -12,8 +12,6 @@ const FRIENDLY: Record<string, string> = {
   FORBIDDEN: "You do not have access to that action.",
   PLATFORM_PAUSED: "Money movement is paused for maintenance.",
   DAILY_LOCK: "Money movement is locked while the daily books close.",
-  INSUFFICIENT_RESERVE:
-    "The reserve does not cover this promise yet — the operation was refused to keep every payout payable.",
   OUTSIDE_WINDOW:
     "Withdrawal requests are only accepted during the published window.",
   INSUFFICIENT_FUNDS: "Your wallet does not have the available balance for that action.",

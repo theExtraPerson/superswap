@@ -3,7 +3,8 @@ import { callRpc, fail, positiveInt, readJson, resolveAdmin } from "@/lib/api/re
 
 /**
  * POST /api/admin/settle — one endpoint, four settlement actions; every one
- * is idempotent, audited and keeps the reserve in lockstep inside admin.sql:
+ * is idempotent and audited inside admin.sql, settling against the external
+ * Shashura account:
  *   { action: "confirm_deposit", id, note? }
  *   { action: "reject_deposit", id, reason }
  *   { action: "pay_withdrawal", id, reference? }

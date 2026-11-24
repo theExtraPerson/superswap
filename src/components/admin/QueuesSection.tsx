@@ -167,7 +167,7 @@ export function QueuesSection({ desk }: { desk: DeskApi }) {
       {kind === "withdrawals" && (
         <Card
           title="Pending withdrawals"
-          hint="Settle how you like: send the money yourself then Mark paid (manual), or Pay via Shashura — the API settles it automatically when the network confirms. Fail refunds the member; both paths move the reserve in lockstep."
+          hint="Settle how you like: send the money yourself then Mark paid (manual), or Pay via Shashura — the API settles it automatically when the network confirms. Fail refunds the member; both paths settle against the external Shashura account."
         >
           {!withdrawals || withdrawals.length === 0 ? (
             <p className="text-sm text-[#92a0b9]">Queue is clear.</p>

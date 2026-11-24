@@ -9,7 +9,7 @@ import type { DeskApi } from "./useDesk";
 import { inputCls, shortId, when } from "./parts";
 
 /** Members — searchable list; detail with wallet correction + ban/unban.
- *  Positive corrections are reserve-gated in SQL: no minting from thin air. */
+ *  Every correction carries a reason and lands in the admin audit log. */
 export function MembersSection({ desk }: { desk: DeskApi }) {
   const [q, setQ] = useState(desk.search);
   const [openId, setOpenId] = useState<string | null>(null);
@@ -136,7 +136,7 @@ function MemberDetail({
         <Btn variant="ghost" onClick={onClose}>Close</Btn>
       </div>
       <p className="mt-1 text-[11px] text-[#5d6f93]">
-        Credits are refused if the reserve would stop covering all obligations — fund the reserve first.
+        Every correction needs a reason and is written to the admin audit log.
       </p>
 
       {detail.cycles.length > 0 && (

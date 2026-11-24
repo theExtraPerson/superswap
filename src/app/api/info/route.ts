@@ -3,8 +3,8 @@ import { anonClient, callRpc } from "@/lib/api/respond";
 import type { PublicInfoPayload } from "@/lib/api/types";
 
 /**
- * GET /api/info — public marketing read: current rules, the vault catalogue
- * and the live reserve coverage. No session required (app_public_info).
+ * GET /api/info — public marketing read: current rules and the vault
+ * catalogue. No session required (app_public_info).
  */
 export async function GET() {
   await connection(); // per-request under cacheComponents; never prerendered
