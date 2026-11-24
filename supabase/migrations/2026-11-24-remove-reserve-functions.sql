@@ -14,6 +14,10 @@
 -- withdrawal settlement, promo credit, reserve top-up/draw) would break those
 -- functions at call time. Function bodies below are byte-identical to the
 -- updated supabase/rpc.sql and supabase/admin.sql.
+--
+-- 2026-11-24 SYNC: bodies re-synced after the referral-league + EAT-settlement
+-- final touches (see 2026-11-24-referral-league-and-eat-settlement.sql, which
+-- supersedes these definitions and MUST run after this file).
 -- ============================================================================
 
 -- 1. Promo credit: no longer mirrored into the reserve as a 'promo_overlay'.
@@ -45,7 +49,7 @@ declare
   v_dep deposits;
   v_referrer uuid;
   v_l2_referrer uuid;
-  v_comm_pct numeric := app_setting_num('referral_commission_percent', 17);
+  v_comm_pct numeric := app_setting_num('referral_commission_percent', 18);
   v_comm_l2_pct numeric := app_setting_num('referral_commission_l2_percent', 1);
   v_commission numeric(16,2) := 0;
   v_commission_l2 numeric(16,2) := 0;
@@ -276,7 +280,7 @@ begin
       'min_deposit', app_setting_num('min_deposit', 10000),
       'min_withdrawal', app_setting_num('min_withdrawal', 5000),
       'withdrawal_fee_percent', app_setting_num('withdrawal_fee_percent', 17),
-      'referral_commission_percent', app_setting_num('referral_commission_percent', 17),
+      'referral_commission_percent', app_setting_num('referral_commission_percent', 18),
       'referral_commission_l2_percent', app_setting_num('referral_commission_l2_percent', 1),
       'signup_bonus', app_setting_num('signup_bonus', 1500),
       'withdraw_window_from', app_setting_text('withdraw_window_from', '09:00'),
@@ -287,7 +291,9 @@ begin
       'lock_at', app_setting_text('lock_at', '19:45'),
       'platform_paused', app_setting_bool('platform_paused', false),
       'pause_message', app_setting_text('pause_message', ''),
-      'support_contact', app_setting_text('support_contact', '')
+      'support_contact', app_setting_text('support_contact', ''),
+      'community_link', app_setting_text('community_link', 'https://t.me/+D8o6_tUFNbFjNjE0'),
+      'support_link', app_setting_text('support_link', '')
     ),
     'checkin', jsonb_build_object(
       'bonus', app_setting_num('checkin_bonus', 100),
@@ -384,7 +390,7 @@ language sql stable security definer set search_path = public as $$
       'min_deposit', app_setting_num('min_deposit', 10000),
       'min_withdrawal', app_setting_num('min_withdrawal', 5000),
       'withdrawal_fee_percent', app_setting_num('withdrawal_fee_percent', 17),
-      'referral_commission_percent', app_setting_num('referral_commission_percent', 17),
+      'referral_commission_percent', app_setting_num('referral_commission_percent', 18),
       'referral_commission_l2_percent', app_setting_num('referral_commission_l2_percent', 1),
       'signup_bonus', app_setting_num('signup_bonus', 1500),
       'withdraw_window_from', app_setting_text('withdraw_window_from', '09:00'),
@@ -438,13 +444,19 @@ begin
   v_yield := round(p_principal * v_product.total_rate_pct / 100, 2);
   v_payout := p_principal + v_yield;
 
-  -- Cycle first: its unique idem key is the atomic replay guard.
+  -- Cycle first: its unique idem key is the atomic replay guard. Maturity is
+  -- the settlement hour on the PLATFORM-TIMEZONE wall clock (10 pm Kampala
+  -- with the shipped seeds), not on the UTC server clock — otherwise "daily at
+  -- settlement_hour" would silently release earnings an hour into the next
+  -- EAT day.
   insert into vault_cycles (user_id, product_id, product_snapshot, principal, total_rate_pct,
                             promised_yield, payout_total, matures_at, idem_key)
   values (v_me.user_id, v_product.id, to_jsonb(v_product), p_principal, v_product.total_rate_pct,
           v_yield, v_payout,
-          (date_trunc('day', now()) + app_setting_time('settlement_hour', '22:00')::interval
-            + make_interval(days => v_product.duration_days)), p_idem_key)
+          ((date_trunc('day', now() at time zone app_setting_text('timezone', 'Africa/Kampala'))
+            + app_setting_time('settlement_hour', '22:00')::interval
+            + make_interval(days => v_product.duration_days))
+           at time zone app_setting_text('timezone', 'Africa/Kampala')), p_idem_key)
   returning * into v_cycle;
 
   perform app_debit(v_me.user_id, p_principal, 'vault_debit', 'vault_cycles', v_cycle.id,

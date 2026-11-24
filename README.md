@@ -55,7 +55,9 @@ Apply in order against your project (SQL editor or `supabase db push`):
    `app_public_info`. `app_obligations()` reports member liability (wallets +
    open-vault payouts) to the admin desk; there is no coverage ratio or
    solvency gate because the backing float is external and not mirrored here.
-   `app_settle_matured()` is the idempotent cron body. Clock rules go through
+   `app_settle_matured()` is the idempotent settlement body — Supabase pg_cron
+   fires it daily at 22:05 EAT (vaults mature on the `timezone` wall clock at
+   `settlement_hour`). Clock rules go through
    `app_clock()` (wall clock in the `timezone` setting), the withdrawal window
    gate is `app_assert_withdrawal_window()`, and promo credits go through
    `app_promo_credit()` — a plain, idempotent wallet credit.
@@ -137,9 +139,12 @@ Uniform envelope `{ data } | { error: { code, message } }`.
 | `POST /api/settle` | `app_settle_matured` | `Bearer $CRON_SECRET` (service-role) |
 | `/api/admin/*` (self, dashboard, queue, settle, members, products, settings, admins, audit) | `app_admin_*` | admin (guard in SQL) |
 
-Scheduling: point a Vercel Cron (or any timer) at
-`POST /api/settle` with `Authorization: Bearer $CRON_SECRET` — daily near
-the `settlement_hour` setting. The service-role key is used **only** there.
+Scheduling: Supabase pg_cron (registered by
+`supabase/migrations/2026-11-24-referral-league-and-eat-settlement.sql`) releases
+all matured payouts daily at 22:05 EAT — Vercel Cron is deprecated. Any external
+timer may also fire the same idempotent run:
+`POST /api/settle` with `Authorization: Bearer $CRON_SECRET`. The service-role
+key is used **only** there.
 
 ## Screens
 
@@ -165,7 +170,8 @@ and the settings form render from that whitelist — nothing to patch in the UI.
 
 Current values: min deposit 10 000 · min withdrawal 5 000 · withdrawal fee 17% ·
 withdrawal window 09:00–21:00 `Africa/Kampala` · welcome bonus 1 500 UGX ·
-L1 referral commission 18% · settlement 22:00 · daily lock 19:45 (2 h, database
+L1 referral commission 18% · L2 referral commission 1% · settlement 22:00 EAT
+(payouts released 22:05 EAT by pg_cron) · daily lock 19:45 (2 h, database
 clock).
 
 ## Develop

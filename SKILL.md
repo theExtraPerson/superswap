@@ -34,7 +34,7 @@ is not.
 - **Next.js (App Router) + TypeScript**, server actions for writes.
 - **Supabase**: Postgres + RLS + `security definer` RPCs; auth is username-mapped-to-email (`user@domain`) so login is just handle + password.
 - **Mobile-money gateway** behind one server-only module (e.g. Shashura `/requestToPay` + `/disburse` + signed callback). Keep every secret non-`NEXT_PUBLIC_`.
-- **Vercel** deploy with a scheduled job for the daily credit (Schedules/Cron → a private route).
+- **Vercel** deploy; schedule the daily credit inside the database (Supabase pg_cron — Vercel Cron is deprecated), with a private route as the manual/external fallback.
 - Single `brand.ts` as the one source of truth for name, currency, support links, referral copy.
 
 ## 1 · Data model
@@ -171,7 +171,7 @@ Reference information architecture (superswca-style), one screen per bottom tab 
 - [ ] config.ts: env-mirrored rules (fallbacks must equal RPC fallbacks)
 - [ ] Server actions + a DB-error → friendly-message map (code before ':')
 - [ ] Gateway module (server-only) + /callback route (signature-verified, idempotent)
-- [ ] Daily payout route + Vercel Schedule/Cron at the maturity hour
+- [ ] Daily payout: pg_cron job on the maturity schedule + private route fallback
 - [ ] Shell: tab bar, dashboard RPC, wallet forms, quick actions, PWA, Telegram float
 - [ ] Admin dashboard screens wired to the admin RPCs
 - [ ] Security pass: RLS everywhere, writes only via definer, secrets non-public,

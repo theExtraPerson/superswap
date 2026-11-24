@@ -23,6 +23,7 @@ export const appRulesFallback = {
   min_withdrawal: 5000,
   withdrawal_fee_percent: 17,
   referral_commission_percent: 18,
+  referral_commission_l2_percent: 1,
   signup_bonus: 1500,
   checkin_bonus: 100,
   withdraw_window_from: "09:00",
@@ -33,6 +34,8 @@ export const appRulesFallback = {
   platform_paused: false,
   pause_message: "",
   support_contact: "",
+  community_link: "https://t.me/+D8o6_tUFNbFjNjE0",
+  support_link: "",
 } as const;
 
 // Client-side input validators (UX only — the DB re-checks everything).

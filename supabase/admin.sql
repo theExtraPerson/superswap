@@ -227,7 +227,7 @@ declare
   v_dep deposits;
   v_referrer uuid;
   v_l2_referrer uuid;
-  v_comm_pct numeric := app_setting_num('referral_commission_percent', 17);
+  v_comm_pct numeric := app_setting_num('referral_commission_percent', 18);
   v_comm_l2_pct numeric := app_setting_num('referral_commission_l2_percent', 1);
   v_commission numeric(16,2) := 0;
   v_commission_l2 numeric(16,2) := 0;
@@ -668,15 +668,17 @@ language sql stable as $$
     ('withdraw_window_from',   'time',   'Withdrawals open at (HH:MM)',  'Member wall-clock time in the timezone below.'),
     ('withdraw_window_to',     'time',   'Withdrawals close at (HH:MM)', 'Requests outside the window are refused (deposits and vaults are unaffected).'),
     ('timezone',               'text',   'Rules timezone',               'IANA zone name, e.g. Africa/Kampala. Drives the withdrawal window and the desk clock.'),
-    ('signup_bonus',           'number', 'Welcome bonus (UGX)',          'One-time credit on the member''s first sign-in. 0 disables. Overlay-funded.'),
-    ('checkin_bonus',          'number', 'Daily check-in reward (UGX)',  'Credited once per platform-timezone day from the Home tab. 0 disables. Overlay-funded.'),
-    ('referral_commission_percent', 'number', 'Referral commission L1 (%)', 'Paid to the direct referrer on EVERY confirmed deposit by their referee. 0 disables. Overlay-funded.'),
-    ('referral_commission_l2_percent', 'number', 'Referral commission L2 (%)', 'Paid to the referrer''s own referrer (2nd generation) on EVERY confirmed deposit. 0 disables. Overlay-funded.'),
-    ('settlement_hour',        'time',   'Settlement hour (HH:MM)',      'Vaults mature at this hour on their maturity date.'),
+    ('signup_bonus',           'number', 'Welcome bonus (UGX)',          'One-time credit on the member''s first sign-in. 0 disables.'),
+    ('checkin_bonus',          'number', 'Daily check-in reward (UGX)',  'Credited once per platform-timezone day from the Home tab. 0 disables.'),
+    ('referral_commission_percent', 'number', 'Referral commission L1 (%)', 'Paid to the direct referrer on EVERY confirmed deposit by their referee. 0 disables.'),
+    ('referral_commission_l2_percent', 'number', 'Referral commission L2 (%)', 'Paid to the referrer''s own referrer (2nd generation) on EVERY confirmed deposit. 0 disables.'),
+    ('settlement_hour',        'time',   'Settlement hour (HH:MM)',      'Vaults mature at this wall-clock hour in the rules timezone; pg_cron releases payouts daily right after it.'),
     ('lock_at',                'time',   'Daily lock start (HH:MM)',     'All money movement locked for 2 hours from this time. Uses the database clock (UTC on Supabase), not the timezone above.'),
     ('platform_paused',        'bool',   'Pause money movement',         'Blocks deposits/withdrawals/vault operations (reads keep working).'),
     ('pause_message',          'text',   'Pause message',                'Shown to members while paused.'),
     ('support_contact',        'text',   'Support contact',              'Shown in member UI.'),
+    ('community_link',         'link',   'Community channel link',       'Opened by the "Community" button on the Home tab (Telegram channel). Full https:// URL; empty hides the button.'),
+    ('support_link',           'link',   'Support chat link',            'Opened by the "Support" button on the Home tab (chat, e.g. a t.me username DM). Full https:// URL; empty hides the button.'),
     ('auth_email_domain',      'text',   'Login email host',             'Usernames sign in as username@<this>; no mail is ever sent. Set BEFORE the first signup — it freezes once members exist (changing it breaks every login).')
   ) as t(key, kind, label, hint);
 $$;
@@ -701,6 +703,11 @@ begin
   end if;
   if v_kind = 'text' and char_length(p_value) > 300 then
     raise exception 'INVALID_REQUEST: % too long (max 300).', p_key;
+  end if;
+  -- Link settings are clicked straight into an <a href>, so demand a full URL
+  -- (or empty, which hides the member-facing button) — never javascript:, etc.
+  if v_kind = 'link' and p_value <> '' and p_value !~ '^https?://\S+$' then
+    raise exception 'INVALID_REQUEST: % must be a full https:// URL, or empty to hide the button.', p_key;
   end if;
   -- A bad zone name would break every clock-derived rule, so it must be real.
   if p_key = 'timezone' and not pg_timezone_exists(p_value) then

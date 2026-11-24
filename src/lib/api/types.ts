@@ -35,6 +35,9 @@ export interface RulesPayload {
   platform_paused: boolean;
   pause_message?: string;
   support_contact?: string;
+  /** Home-tab "Community" (Telegram channel) / "Support" (chat) buttons; empty hides one. */
+  community_link?: string;
+  support_link?: string;
   /** Referral commission paid to the direct (L1) referrer, percent. */
   referral_commission_percent?: number | string;
   /** Referral commission paid to the 2nd-generation (L2) referrer, percent. */
@@ -185,6 +188,16 @@ export interface TeamPayload {
   members: {
     name: string;
     joined_at: string;
+    first_deposit_at: string | null;
+    deposited_total?: number | string;
+    commission_earned?: number | string;
+  }[];
+  /** Level-2 roster: members brought in by the people YOU invited. */
+  team_l2?: {
+    name: string;
+    joined_at: string;
+    /** Your direct referee who carried this member in. */
+    invited_by?: string;
     first_deposit_at: string | null;
     deposited_total?: number | string;
     commission_earned?: number | string;

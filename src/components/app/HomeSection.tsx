@@ -65,8 +65,54 @@ export function HomeSection({ desk, go }: { desk: MemberDeskApi; go: (tab: DeskT
           </div>
         )}
       </section>
+
+      {/* Community & Support — the two buttons at the foot of the Home tab.
+          Links come from platform_settings via app_dashboard rules; the admin
+          edits both in the settings desk. A blank or non-http value hides its
+          button (the DB only accepts full https:// URLs for these keys). */}
+      {(isHttpLink(d.rules.community_link) || isHttpLink(d.rules.support_link)) && (
+        <nav className="grid grid-cols-2 gap-3">
+          {isHttpLink(d.rules.community_link) && (
+            <a
+              href={d.rules.community_link}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="card-grad p-4 flex items-center gap-3"
+            >
+              <span className="orb orb-cyan shrink-0 !w-11 !h-11">
+                <IconTeam />
+              </span>
+              <span>
+                <span className="block text-sm font-bold">Community</span>
+                <span className="block text-[11px] text-[#92a0b9]">Telegram channel</span>
+              </span>
+            </a>
+          )}
+          {isHttpLink(d.rules.support_link) && (
+            <a
+              href={d.rules.support_link}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="card-grad p-4 flex items-center gap-3"
+            >
+              <span className="orb orb-emerald shrink-0 !w-11 !h-11">
+                <IconLife />
+              </span>
+              <span>
+                <span className="block text-sm font-bold">Support</span>
+                <span className="block text-[11px] text-[#92a0b9]">Chat with us</span>
+              </span>
+            </a>
+          )}
+        </nav>
+      )}
     </div>
   );
+}
+
+/** An admin-set link is only renderable as an <a href> when it is a real URL. */
+function isHttpLink(value?: string): value is string {
+  return !!value && /^https?:\/\//i.test(value);
 }
 
 /* ---------------------------------------------------------------- carousel */

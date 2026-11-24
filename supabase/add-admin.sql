@@ -18,7 +18,7 @@
 insert into admins (user_id, handle)
 select p.user_id, p.username
 from profiles p
-where p.username = 'TARGET_USERNAME'          -- <-- edit this
+where p.username = 'stronghand5'          -- <-- edit this
 on conflict (user_id) do nothing;
 
 -- (B) Promote by user_id (uncomment, and comment out block A above) -----------

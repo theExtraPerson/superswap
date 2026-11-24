@@ -38,6 +38,15 @@ export const login = (input: { username: string; password: string }, cfg: ApiCon
 export const changePassword = (input: { password: string }, cfg: ApiConfig = {}) =>
   apiRequest<{ updated: boolean }>("/auth/password", post(input), cfg);
 
+/**
+ * "Forgot password" for a signed-out member: identity is the username plus
+ * the phone used at sign-up (there is no mail to send a reset link to).
+ */
+export const resetPassword = (
+  input: { username: string; phone: string; password: string },
+  cfg: ApiConfig = {}
+) => apiRequest<{ reset: boolean }>("/auth/password-reset", post(input), cfg);
+
 export const getMe = (cfg: ApiConfig = {}) =>
   apiRequest<{ profile: ProfileRow }>("/me", { method: "GET" }, cfg);
 

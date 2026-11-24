@@ -59,17 +59,20 @@ insert into platform_settings (key, value) values
   ('min_deposit', '10000'),
   ('min_withdrawal', '5000'),
   ('withdrawal_fee_percent', '17'),
-  ('referral_commission_percent', '18'),  -- L1 only: to the referrer on each referee deposit
+  ('referral_commission_percent', '18'),  -- L1: to the direct referrer on each referee deposit
+  ('referral_commission_l2_percent', '1'), -- L2: to the referrer's own referrer (2nd generation)
   ('signup_bonus', '1500'),               -- UGX, once per member, credited at first sign-in
   ('checkin_bonus', '100'),               -- UGX, daily check-in reward on the Home tab; 0 disables
   ('timezone', 'Africa/Kampala'),         -- IANA zone the member-facing clock rules use
   ('withdraw_window_from', '09:00'),      -- withdrawals open (wall clock in `timezone`)
   ('withdraw_window_to', '21:00'),        -- withdrawals close (wall clock in `timezone`)
-  ('settlement_hour', '22:00'),           -- matured vaults close at this hour
+  ('settlement_hour', '22:00'),           -- vaults mature at this hour on the `timezone` wall clock
   ('lock_at', '19:45'),                   -- daily money-movement lock window (DB clock, UTC on Supabase)
   ('platform_paused', 'false'),
   ('pause_message', ''),
-  ('support_contact', '')
+  ('support_contact', ''),
+  ('community_link', 'https://t.me/+D8o6_tUFNbFjNjE0'), -- Home tab "Community" (Telegram channel)
+  ('support_link', '')                                  -- Home tab "Support" (chat); empty hides the button
 on conflict (key) do nothing;
 
 -- ----------------------------------------------------------------------------
@@ -156,7 +159,7 @@ create table if not exists ledger (
   kind text not null check (kind in (
     'deposit_credit', 'withdrawal_debit', 'withdrawal_reversal',
     'vault_debit', 'vault_payout', 'vault_exit_credit',
-    'referral_reward', 'bonus_credit', 'checkin_bonus',
+    'referral_reward', 'referral_reward_l2', 'bonus_credit', 'checkin_bonus',
     'adjustment_credit', 'adjustment_debit')),
   balance_after numeric(16,2) not null,
   ref_table text,
@@ -165,7 +168,7 @@ create table if not exists ledger (
   idem_key text,
   created_at timestamptz not null default now()
 );
-create unique index ledger_idem_uidx on ledger (idem_key) where idem_key is not null;
+create unique index if not exists ledger_idem_uidx on ledger (idem_key) where idem_key is not null;
 create index if not exists ledger_user_created_idx on ledger (user_id, created_at desc);
 
 -- Re-run convergence: an older deployment carries the pre-check-in kind list,
@@ -174,12 +177,12 @@ alter table ledger drop constraint if exists ledger_kind_check;
 alter table ledger add constraint ledger_kind_check check (kind in (
     'deposit_credit', 'withdrawal_debit', 'withdrawal_reversal',
     'vault_debit', 'vault_payout', 'vault_exit_credit',
-    'referral_reward', 'bonus_credit', 'checkin_bonus',
+    'referral_reward', 'referral_reward_l2', 'bonus_credit', 'checkin_bonus',
     'adjustment_credit', 'adjustment_debit'));
 
 -- Daily check-in log — one row per member per platform-timezone day. The
 -- primary key IS the idempotency guard; reward credits flow through
--- app_promo_credit like every other overlay-funded promotion (section 7 RPC).
+-- app_promo_credit like every other promotion (section 7 RPC).
 create table if not exists checkin_log (
   user_id uuid not null references profiles (user_id) on delete cascade,
   day date not null,
@@ -214,7 +217,7 @@ create table if not exists vault_cycles (
 );
 create index if not exists vault_cycles_user_idx on vault_cycles (user_id, status);
 create index if not exists vault_cycles_open_idx on vault_cycles (matures_at) where status = 'open';
-create unique index vault_cycles_idem_uidx on vault_cycles (idem_key) where idem_key is not null;
+create unique index if not exists vault_cycles_idem_uidx on vault_cycles (idem_key) where idem_key is not null;
 
 -- ----------------------------------------------------------------------------
 -- 6. Deposit & withdrawal queues (deposits automatic, withdrawals approved)
@@ -247,7 +250,7 @@ create table if not exists deposits (
   settled_by uuid references auth.users (id)
 );
 create index if not exists deposits_status_idx on deposits (status, created_at desc);
-create unique index deposits_gateway_ref_uidx on deposits (gateway_ref) where gateway_ref is not null;
+create unique index if not exists deposits_gateway_ref_uidx on deposits (gateway_ref) where gateway_ref is not null;
 
 create table if not exists withdrawals (
   id bigint generated always as identity primary key,
@@ -272,7 +275,7 @@ create table if not exists withdrawals (
   processed_by uuid references auth.users (id)
 );
 create index if not exists withdrawals_status_idx on withdrawals (status, created_at desc);
-create unique index withdrawals_gateway_ref_uidx on withdrawals (gateway_ref) where gateway_ref is not null;
+create unique index if not exists withdrawals_gateway_ref_uidx on withdrawals (gateway_ref) where gateway_ref is not null;
 
 -- Gateway event idempotency (reserved for the PSP cutover; used by manual settlement too)
 create table if not exists payment_events (

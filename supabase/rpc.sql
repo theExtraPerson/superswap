@@ -217,8 +217,8 @@ begin
   return v_streak;
 end $$;
 
--- Daily check-in reward: once per platform-timezone day, overlay-funded like
--- every other promo (coverage-neutral). The (user_id, day) primary key is the
+-- Daily check-in reward: once per platform-timezone day, a plain wallet
+-- promo credit like every other promotion. The (user_id, day) primary key is the
 -- replay guard; the ledger idem key doubles it for money movement.
 create or replace function app_checkin() returns jsonb
 language plpgsql security definer set search_path = public as $$
@@ -278,6 +278,21 @@ language sql stable security definer set search_path = public as $$
   select exists (select 1 from profiles where referral_code = upper(trim(p_code)))
 $$;
 
+-- Password-reset identity check (there is no mail to send a link to): the
+-- username AND the phone it registered with must both match an un-banned
+-- member. Phones compare on the last 9 digits, so +2567… and 07… are the same
+-- number. Returns the auth user id for the server route's service-role reset;
+-- NULL means "no match" and the route answers with one generic sentence.
+create or replace function app_password_reset_verify(p_username text, p_phone text) returns uuid
+language sql stable security definer set search_path = public as $$
+  select pr.user_id
+    from profiles pr
+   where pr.username = lower(trim(p_username))
+     and right(regexp_replace(pr.phone, '\D', '', 'g'), 9)
+         = right(regexp_replace(coalesce(p_phone, ''), '\D', '', 'g'), 9)
+     and not pr.is_banned
+$$;
+
 -- ---------------------------------------------------------------- dashboard
 create or replace function app_dashboard() returns jsonb
 language plpgsql stable security definer set search_path = public as $$
@@ -295,7 +310,7 @@ begin
       'min_deposit', app_setting_num('min_deposit', 10000),
       'min_withdrawal', app_setting_num('min_withdrawal', 5000),
       'withdrawal_fee_percent', app_setting_num('withdrawal_fee_percent', 17),
-      'referral_commission_percent', app_setting_num('referral_commission_percent', 17),
+      'referral_commission_percent', app_setting_num('referral_commission_percent', 18),
       'referral_commission_l2_percent', app_setting_num('referral_commission_l2_percent', 1),
       'signup_bonus', app_setting_num('signup_bonus', 1500),
       'withdraw_window_from', app_setting_text('withdraw_window_from', '09:00'),
@@ -306,7 +321,9 @@ begin
       'lock_at', app_setting_text('lock_at', '19:45'),
       'platform_paused', app_setting_bool('platform_paused', false),
       'pause_message', app_setting_text('pause_message', ''),
-      'support_contact', app_setting_text('support_contact', '')
+      'support_contact', app_setting_text('support_contact', ''),
+      'community_link', app_setting_text('community_link', 'https://t.me/+D8o6_tUFNbFjNjE0'),
+      'support_link', app_setting_text('support_link', '')
     ),
     'checkin', jsonb_build_object(
       'bonus', app_setting_num('checkin_bonus', 100),
@@ -371,13 +388,19 @@ begin
   v_yield := round(p_principal * v_product.total_rate_pct / 100, 2);
   v_payout := p_principal + v_yield;
 
-  -- Cycle first: its unique idem key is the atomic replay guard.
+  -- Cycle first: its unique idem key is the atomic replay guard. Maturity is
+  -- the settlement hour on the PLATFORM-TIMEZONE wall clock (10 pm Kampala
+  -- with the shipped seeds), not on the UTC server clock — otherwise "daily at
+  -- settlement_hour" would silently release earnings an hour into the next
+  -- EAT day.
   insert into vault_cycles (user_id, product_id, product_snapshot, principal, total_rate_pct,
                             promised_yield, payout_total, matures_at, idem_key)
   values (v_me.user_id, v_product.id, to_jsonb(v_product), p_principal, v_product.total_rate_pct,
           v_yield, v_payout,
-          (date_trunc('day', now()) + app_setting_time('settlement_hour', '22:00')::interval
-            + make_interval(days => v_product.duration_days)), p_idem_key)
+          ((date_trunc('day', now() at time zone app_setting_text('timezone', 'Africa/Kampala'))
+            + app_setting_time('settlement_hour', '22:00')::interval
+            + make_interval(days => v_product.duration_days))
+           at time zone app_setting_text('timezone', 'Africa/Kampala')), p_idem_key)
   returning * into v_cycle;
 
   perform app_debit(v_me.user_id, p_principal, 'vault_debit', 'vault_cycles', v_cycle.id,
@@ -415,7 +438,9 @@ begin
 end $$;
 
 -- Cron (also admin-runnable): close matured open vaults, credit full payouts.
--- Safe any time; pays out at most once per cycle.
+-- Safe any time; pays out at most once per cycle. Supabase pg_cron fires it
+-- daily at 22:05 EAT (see 2026-11-24-referral-league-and-eat-settlement.sql);
+-- POST /api/settle remains the manual/external fallback.
 create or replace function app_settle_matured() returns jsonb
 language plpgsql security definer set search_path = public as $$
 declare
@@ -526,14 +551,16 @@ end $$;
 -- Two generations. The direct referrer (L1) earns referral_commission_percent of
 -- each deposit their referee makes; the referee's own referrer (L2, the
 -- grandparent) earns referral_commission_l2_percent of the same deposit. Both
--- are paid inside app_deposit_credited_core, overlay-funded and replay-safe.
+-- are paid inside app_deposit_credited_core, promo-funded and replay-safe.
+-- The member desk shows BOTH rosters: `members` (level 1) and `l2_team`
+-- (level 2), each with what every person earned, so the whole league is visible.
 create or replace function app_team() returns jsonb
 language plpgsql stable security definer set search_path = public as $$
 declare v_me profiles := app_profile();
 begin
   return jsonb_build_object(
     'referral_code', v_me.referral_code,
-    'commission_percent', app_setting_num('referral_commission_percent', 17),
+    'commission_percent', app_setting_num('referral_commission_percent', 18),
     'commission_l2_percent', app_setting_num('referral_commission_l2_percent', 1),
     'signup_bonus', app_setting_num('signup_bonus', 1500),
     'members', (select coalesce(jsonb_agg(jsonb_build_object(
@@ -549,6 +576,22 @@ begin
                                                               where d.user_id = p.user_id)))
                    order by p.created_at desc), '[]'::jsonb)
       from profiles p where p.referred_by = v_me.user_id),
+    'l2_team', (select coalesce(jsonb_agg(jsonb_build_object(
+                     'name', q.display_name, 'joined_at', q.created_at,
+                     'invited_by', p.display_name,
+                     'first_deposit_at', (select min(settled_at) from deposits d
+                                          where d.user_id = q.user_id and d.status = 'confirmed'),
+                     'deposited_total', (select coalesce(sum(amount), 0) from deposits d
+                                         where d.user_id = q.user_id and d.status = 'confirmed'),
+                     'commission_earned', (select coalesce(sum(l.amount), 0) from ledger l
+                                           where l.user_id = v_me.user_id and l.kind = 'referral_reward_l2'
+                                             and l.ref_table = 'deposits'
+                                             and l.ref_id in (select d.id from deposits d
+                                                              where d.user_id = q.user_id)))
+                   order by q.created_at desc), '[]'::jsonb)
+      from profiles q
+      join profiles p on p.user_id = q.referred_by
+      where p.referred_by = v_me.user_id),
     'l2_members', (select count(*) from profiles q
       where q.referred_by in (select p.user_id from profiles p where p.referred_by = v_me.user_id)),
     'referral_credits', (select coalesce(sum(amount), 0) from ledger
@@ -566,6 +609,7 @@ grant execute on function app_setting_bool(text, boolean) to anon, authenticated
 grant execute on function app_auth_email(text) to anon, authenticated;
 grant execute on function app_username_taken(text) to anon, authenticated;
 grant execute on function app_referral_valid(text) to anon, authenticated;
+grant execute on function app_password_reset_verify(text, text) to anon, authenticated;
 grant execute on function app_obligations() to anon;
 grant execute on function app_clock() to anon, authenticated;
 grant execute on function app_clock_label() to anon, authenticated;
@@ -600,7 +644,7 @@ language sql stable security definer set search_path = public as $$
       'min_deposit', app_setting_num('min_deposit', 10000),
       'min_withdrawal', app_setting_num('min_withdrawal', 5000),
       'withdrawal_fee_percent', app_setting_num('withdrawal_fee_percent', 17),
-      'referral_commission_percent', app_setting_num('referral_commission_percent', 17),
+      'referral_commission_percent', app_setting_num('referral_commission_percent', 18),
       'referral_commission_l2_percent', app_setting_num('referral_commission_l2_percent', 1),
       'signup_bonus', app_setting_num('signup_bonus', 1500),
       'withdraw_window_from', app_setting_text('withdraw_window_from', '09:00'),

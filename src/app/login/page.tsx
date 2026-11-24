@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { Suspense, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { login } from "@/lib/app/api";
 import { ApiError } from "@/lib/api/client";
 import { BrandMark } from "@/components/ui";
@@ -39,6 +39,12 @@ export default function LoginPage() {
           </h1>
           <p className="text-[#c3cfe4] text-sm">Sign in to save, earn yield and grow</p>
         </header>
+
+        {/* Receipt from /forgot-password (?reset=1). useSearchParams lives in
+            a child behind Suspense — the page itself stays prerenderable. */}
+        <Suspense fallback={null}>
+          <ResetReceipt />
+        </Suspense>
 
         <form onSubmit={onSubmit} className="card-grad p-5 flex flex-col gap-4">
           <label className="block">
@@ -81,6 +87,12 @@ export default function LoginPage() {
           </button>
         </form>
 
+        <p className="text-center text-xs text-[#92a0b9] -mt-1">
+          <Link href="/forgot-password" className="text-[#45e9ff] font-semibold">
+            Forgot password?
+          </Link>
+        </p>
+
         <p className="text-center text-xs text-[#92a0b9]">
           New here?{" "}
           <Link href="/register" className="text-[#45e9ff] font-semibold">
@@ -89,5 +101,15 @@ export default function LoginPage() {
         </p>
       </div>
     </main>
+  );
+}
+
+function ResetReceipt() {
+  const params = useSearchParams();
+  if (params.get("reset") !== "1") return null;
+  return (
+    <div className="rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-300">
+      Password updated — sign in with your new one.
+    </div>
   );
 }

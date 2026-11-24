@@ -3,9 +3,12 @@ import { CRON_SECRET, SUPABASE_SERVICE_ROLE_KEY } from "@/lib/supabase/config";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 /**
- * POST /api/settle — the settlement cron (Vercel Cron, daily after the
- * settlement hour). Credits every matured vault payout exactly once
- * (app_settle_matured, idempotent per cycle) and returns the summary.
+ * POST /api/settle — manual/external settlement run. The daily release of
+ * matured payouts now lives inside the database: Supabase pg_cron fires
+ * app_settle_matured() every day at 22:05 EAT (see
+ * supabase/migrations/2026-11-24-referral-league-and-eat-settlement.sql);
+ * Vercel Cron is deprecated. This route stays as the on-demand fallback —
+ * it credits every matured vault payout exactly once (idempotent per cycle).
  * Guarded by CRON_SECRET as a bearer token; the service-role key is the ONLY
  * privileged credential this app uses, and only here.
  */
