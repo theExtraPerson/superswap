@@ -24,13 +24,19 @@ const KIND_LABEL: Record<string, string> = {
 
 export function LedgerRowItem({ row }: { row: LedgerRow }) {
   const positive = Number(row.amount) >= 0;
+  // Admin corrections: the operator's written reason IS what the member needs
+  // to see, so surface it as the entry label instead of the generic "Correction"
+  // kind. Direction still reads from the +/- amount, so nothing is lost.
+  const isCorrection = row.kind === "adjustment_credit" || row.kind === "adjustment_debit";
+  const reasonAsLabel = isCorrection && !!row.note;
+  const title = reasonAsLabel ? row.note : (KIND_LABEL[row.kind] ?? row.kind);
   return (
     <div className="card-grad !rounded-xl p-3 flex items-center justify-between gap-2">
       <div className="min-w-0">
-        <div className="text-xs font-bold truncate">{KIND_LABEL[row.kind] ?? row.kind}</div>
+        <div className="text-xs font-bold truncate">{title}</div>
         <div className="text-[10px] text-[#92a0b9] mt-0.5">
           {fmtDateTime(row.created_at)}
-          {row.note ? ` · ${row.note}` : ""}
+          {row.note && !reasonAsLabel ? ` · ${row.note}` : ""}
         </div>
       </div>
       <div className="text-right shrink-0">
