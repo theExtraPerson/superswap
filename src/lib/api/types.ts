@@ -31,7 +31,6 @@ export interface RulesPayload {
   min_withdrawal: number | string;
   withdrawal_fee_percent: number | string;
   settlement_hour: string;
-  lock_at?: string;
   platform_paused: boolean;
   pause_message?: string;
   support_contact?: string;
@@ -104,6 +103,12 @@ export interface CycleRow {
   total_rate_pct: number | string;
   promised_yield: number | string;
   payout_total: number | string;
+  /** Daily-credit engine days (absent on a DB that predates the migration). */
+  days_paid?: number | string;
+  yield_paid?: number | string;
+  last_paid_at?: string | null;
+  /** Snapshotted term length — denominator for the "day X of Y" progress. */
+  duration_days?: number | string;
   status: CycleStatus;
   opened_at: string;
   matures_at: string;

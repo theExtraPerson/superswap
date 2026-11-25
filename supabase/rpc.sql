@@ -56,27 +56,41 @@ language sql stable security definer set search_path = public as $$
 $$;
 
 -- Are withdrawal requests accepted at this instant? (window is inclusive)
+-- Bank hours: ONLY withdrawals keep an office window (09:00–22:00 EAT).
+-- Deposits, vault opens/exits and check-ins run around the clock.
 create or replace function app_withdrawals_open() returns boolean
 language sql stable security definer set search_path = public as $$
   select app_clock() between app_setting_time('withdraw_window_from', '09:00')
-                         and app_setting_time('withdraw_window_to', '21:00')
+                         and app_setting_time('withdraw_window_to', '22:00')
+$$;
+
+-- When day p_day (0-based) of a cycle opened at p_opened_at becomes payable:
+-- settlement_hour on the PLATFORM-TIMEZONE wall clock, day index counted from
+-- the opening day, always rolled strictly after the opening instant. The final
+-- day (p_day = duration_days - 1) is the cycle's matures_at.
+create or replace function app_cycle_day_due(p_opened_at timestamptz, p_day integer) returns timestamptz
+language sql stable security definer set search_path = public as $$
+  select case when v_due <= p_opened_at then v_due + interval '1 day' else v_due end
+  from (
+    select ((date_trunc('day', p_opened_at at time zone v.name)
+             + make_interval(days => p_day)
+             + v.hour::interval) at time zone v.name) as v_due
+    from (select app_setting_text('timezone', 'Africa/Kampala') as name,
+                 app_setting_time('settlement_hour', '22:00') as hour) v
+  ) x
 $$;
 
 -- ---------------------------------------------------------------- gates
--- Platform pause + the daily books-close lock. The lock keeps its historical
--- DB-clock semantics; the withdrawal window (below) is the Kampala one.
+-- Platform pause ONLY. The historical 19:45–21:45 "books-close" lock is
+-- retired: like a bank, only WITHDRAWAL requests keep office hours (through
+-- app_assert_withdrawal_window below, on the Kampala wall clock) while
+-- deposits, vault operations and other money moves stay open 24/7.
 create or replace function app_assert_running() returns void
 language plpgsql stable security definer set search_path = public as $$
-declare
-  v_lock_from time := app_setting_time('lock_at', '19:45');
-  v_lock_to time := v_lock_from + interval '2 hours';
 begin
   if app_setting_bool('platform_paused', false) then
     raise exception 'PLATFORM_PAUSED: %',
       nullif(app_setting_text('pause_message', ''), 'Money movement is briefly paused.');
-  end if;
-  if localtime between v_lock_from and v_lock_to then
-    raise exception 'DAILY_LOCK: Money movement is locked %-% each day while the books close.', v_lock_from, v_lock_to;
   end if;
 end $$;
 
@@ -88,7 +102,7 @@ begin
   if app_withdrawals_open() then return; end if;
   raise exception 'OUTSIDE_WINDOW: Withdrawals open %–% (%).',
     app_setting_time('withdraw_window_from', '09:00'),
-    app_setting_time('withdraw_window_to', '21:00'),
+    app_setting_time('withdraw_window_to', '22:00'),
     app_clock_label();
 end $$;
 
@@ -107,14 +121,15 @@ end $$;
 
 -- ---------------------------------------------------------------- member liability
 -- Total member claims outstanding at this instant: cash balances + every open
--- vault's full payout (principal + promised yield). Reported to the operator as
--- a liability figure only — the float that backs it lives in the external
--- Shashura account and is never mirrored into the app, so no coverage ratio or
--- solvency gate is computed from it.
+-- vault's UNPAID part (principal + the yield days still owed; already-dripped
+-- earnings sit in the wallet). Reported to the operator as a liability figure
+-- only — the float that backs it lives in the external Shashura account and is
+-- never mirrored into the app, so no coverage ratio or solvency gate is
+-- computed from it.
 create or replace function app_obligations() returns numeric
 language sql stable security definer set search_path = public as $$
   select coalesce((select sum(wallet_balance) from profiles), 0)
-       + coalesce((select sum(payout_total) from vault_cycles where status = 'open'), 0)
+       + coalesce((select sum(payout_total - yield_paid) from vault_cycles where status = 'open'), 0)
 $$;
 
 -- ---------------------------------------------------------------- wallet primitives
@@ -314,11 +329,10 @@ begin
       'referral_commission_l2_percent', app_setting_num('referral_commission_l2_percent', 1),
       'signup_bonus', app_setting_num('signup_bonus', 1500),
       'withdraw_window_from', app_setting_text('withdraw_window_from', '09:00'),
-      'withdraw_window_to', app_setting_text('withdraw_window_to', '21:00'),
+      'withdraw_window_to', app_setting_text('withdraw_window_to', '22:00'),
       'timezone', app_setting_text('timezone', 'Africa/Kampala'),
       'withdrawals_open', app_withdrawals_open(),
       'settlement_hour', app_setting_text('settlement_hour', '22:00'),
-      'lock_at', app_setting_text('lock_at', '19:45'),
       'platform_paused', app_setting_bool('platform_paused', false),
       'pause_message', app_setting_text('pause_message', ''),
       'support_contact', app_setting_text('support_contact', ''),
@@ -340,6 +354,8 @@ begin
       from vault_products p where p.visible and p.active),
     'cycles', (select coalesce(jsonb_agg(to_jsonb(c) order by c.status = 'open' desc, c.matures_at desc), '[]'::jsonb)
       from (select id, product_id, principal, total_rate_pct, promised_yield, payout_total,
+                   days_paid, yield_paid, last_paid_at,
+                   (product_snapshot ->> 'duration_days')::int as duration_days,
                    status, opened_at, matures_at, closed_at, product_snapshot -> 'name' as product_name
             from vault_cycles where user_id = v_uid order by created_at desc limit 50) c),
     'deposits', (select coalesce(jsonb_agg(to_jsonb(d) order by d.created_at desc), '[]'::jsonb)
@@ -389,18 +405,15 @@ begin
   v_payout := p_principal + v_yield;
 
   -- Cycle first: its unique idem key is the atomic replay guard. Maturity is
-  -- the settlement hour on the PLATFORM-TIMEZONE wall clock (10 pm Kampala
-  -- with the shipped seeds), not on the UTC server clock — otherwise "daily at
-  -- settlement_hour" would silently release earnings an hour into the next
-  -- EAT day.
+  -- the LAST daily credit's due time (settlement_hour on the PLATFORM-TIMEZONE
+  -- wall clock, 10 pm Kampala with the shipped seeds), not the UTC server
+  -- clock — otherwise "daily at settlement_hour" would silently release
+  -- earnings an hour into the next EAT day.
   insert into vault_cycles (user_id, product_id, product_snapshot, principal, total_rate_pct,
                             promised_yield, payout_total, matures_at, idem_key)
   values (v_me.user_id, v_product.id, to_jsonb(v_product), p_principal, v_product.total_rate_pct,
           v_yield, v_payout,
-          ((date_trunc('day', now() at time zone app_setting_text('timezone', 'Africa/Kampala'))
-            + app_setting_time('settlement_hour', '22:00')::interval
-            + make_interval(days => v_product.duration_days))
-           at time zone app_setting_text('timezone', 'Africa/Kampala')), p_idem_key)
+          app_cycle_day_due(now(), v_product.duration_days - 1), p_idem_key)
   returning * into v_cycle;
 
   perform app_debit(v_me.user_id, p_principal, 'vault_debit', 'vault_cycles', v_cycle.id,
@@ -437,52 +450,99 @@ begin
   return to_jsonb(v_cycle);
 end $$;
 
--- Cron (also admin-runnable): close matured open vaults, credit full payouts.
--- Safe any time; pays out at most once per cycle. Vercel Cron fires this daily
--- at 22:05 EAT via POST/GET /api/settle (see vercel.json); the manual route
--- remains the on-demand fallback.
+-- Cron (also admin-runnable): the DAILY-CREDIT settlement run. Every open
+-- cycle whose next day is due earns its slice of promised_yield as its own
+-- 'vault_earning' ledger row ("Comet · day 3 of 15"); the day that completes
+-- the term also returns the principal ('vault_payout', same idem key as the
+-- old lump-sum era, so replays can never double-pay) and closes the cycle.
+-- pg_cron fires this daily minutes after settlement_hour; /api/settle (manual
+-- bearer route, service-role) runs the exact same function as the fallback.
 --
--- Hardened so a single bad cycle can never stall the whole run:
---   * drains EVERY matured cycle (no 500 cap) — one missed day is fully
---     recovered on the next tick, no backlog left open;
---   * credits each cycle inside its own sub-transaction, so one failure skips
---     that cycle and continues with the rest;
---   * treats ledger.idem_key 'vault_payout:<cycle id>' as the source of truth
---     for "already paid": a cycle credited by a run that then crashed before
---     flipping it to 'closed' is simply closed, never credited twice.
+-- Hardening carried over from the lump-sum engine:
+--   * one cycle failing never stalls the others (per-cycle sub-transaction);
+--   * every credit is replay-safe: idem keys 'vault_earn:<cycle>:<day>' per
+--     day and 'vault_payout:<cycle>' for the principal return;
+--   * cycles already credited by the OLD lump-sum code (or by a run that
+--     crashed after the payout but before closing) are recognised by their
+--     'vault_payout:<cycle>' row and simply closed — the drip never pays twice;
+--   * a missed run self-heals: the inner loop pays EVERY due day, so one
+--     skipped night catches up two credits the next evening.
 create or replace function app_settle_matured() returns jsonb
 language plpgsql security definer set search_path = public as $$
 declare
   v_cycle vault_cycles;
-  v_settled integer := 0;
-  v_total numeric(16,2) := 0;
+  v_days integer;
+  v_next integer;
+  v_amount numeric(16,2);
+  v_idem text;
+  v_days_paid integer := 0;
+  v_yield_total numeric(16,2) := 0;
   v_closed integer := 0;
   v_failed integer := 0;
 begin
   for v_cycle in
     select * from vault_cycles
-      where status = 'open' and matures_at <= now()
+      where status = 'open'
+        and app_cycle_day_due(opened_at, days_paid) <= now()
       order by matures_at
       for update skip locked
   loop
-    -- Credited by an earlier run that died before closing it: finish the job,
-    -- do not pay again.
-    if exists (select 1 from ledger
-               where idem_key = 'vault_payout:' || v_cycle.id and kind = 'vault_payout') then
-      update vault_cycles set status = 'closed', closed_at = coalesce(closed_at, now())
-        where id = v_cycle.id;
+    v_days := nullif(v_cycle.product_snapshot ->> 'duration_days', '')::integer;
+
+    -- Paid in full by the lump-sum code (or a crashed run): finish by closing,
+    -- backfill the day counters, never credit again.
+    if v_days is not null and exists (select 1 from ledger
+        where idem_key = 'vault_payout:' || v_cycle.id and kind = 'vault_payout') then
+      update vault_cycles
+         set status = 'closed', closed_at = coalesce(closed_at, now()),
+             days_paid = v_days, yield_paid = v_cycle.promised_yield
+       where id = v_cycle.id;
       v_closed := v_closed + 1;
       continue;
     end if;
 
     begin
-      perform app_credit(v_cycle.user_id, v_cycle.payout_total, 'vault_payout',
-                         'vault_cycles', v_cycle.id,
-                         'Maturity ' || (v_cycle.product_snapshot ->> 'name'),
-                         'vault_payout:' || v_cycle.id);
-      update vault_cycles set status = 'closed', closed_at = now() where id = v_cycle.id;
-      v_settled := v_settled + 1;
-      v_total := v_total + v_cycle.payout_total;
+      if v_days is null or v_days < 1 then
+        raise exception 'SNAPSHOT_MISSING: cycle % has no usable duration_days', v_cycle.id;
+      end if;
+      v_next := v_cycle.days_paid;
+      while v_next < v_days and app_cycle_day_due(v_cycle.opened_at, v_next) <= now() loop
+        -- Last day trues up the remainder so the drip sums exactly to promised.
+        v_amount := case when v_next = v_days - 1
+                     then v_cycle.promised_yield - v_cycle.yield_paid
+                     else round(v_cycle.promised_yield / v_days, 2)
+                   end;
+        v_idem := 'vault_earn:' || v_cycle.id || ':' || (v_next + 1);
+        if v_amount > 0
+           and not exists (select 1 from ledger where idem_key = v_idem) then
+          perform app_credit(v_cycle.user_id, v_amount, 'vault_earning',
+                             'vault_cycles', v_cycle.id,
+                             (v_cycle.product_snapshot ->> 'name')
+                               || ' · day ' || (v_next + 1) || ' of ' || v_days,
+                             v_idem);
+        end if;
+        if v_amount > 0 then
+          v_cycle.yield_paid := v_cycle.yield_paid + v_amount;
+          v_days_paid := v_days_paid + 1;
+          v_yield_total := v_yield_total + v_amount;
+        end if;
+        v_next := v_next + 1;
+        update vault_cycles
+           set days_paid = v_next, yield_paid = v_cycle.yield_paid, last_paid_at = now()
+         where id = v_cycle.id;
+      end loop;
+
+      if v_next >= v_days then
+        if v_cycle.principal > 0 then
+          perform app_credit(v_cycle.user_id, v_cycle.principal, 'vault_payout',
+                             'vault_cycles', v_cycle.id,
+                             'Maturity · principal return ' || (v_cycle.product_snapshot ->> 'name'),
+                             'vault_payout:' || v_cycle.id);
+        end if;
+        update vault_cycles set status = 'closed', closed_at = now(), last_paid_at = now()
+          where id = v_cycle.id;
+        v_closed := v_closed + 1;
+      end if;
     exception when others then
       -- One unreachable member / bad row must not abort the settlement of all
       -- the others. Log it, leave the cycle open for the operator, keep going.
@@ -490,8 +550,9 @@ begin
       v_failed := v_failed + 1;
     end;
   end loop;
-  return jsonb_build_object('settled', v_settled, 'paid_total', v_total,
-                            'closed', v_closed, 'failed', v_failed);
+  return jsonb_build_object('settled', v_closed, 'closed', v_closed,
+                            'days_credited', v_days_paid, 'yield_credited', v_yield_total,
+                            'failed', v_failed);
 end $$;
 
 
@@ -664,6 +725,8 @@ revoke all on function app_promo_credit(uuid, numeric, text, text, bigint, text,
   from public, anon, authenticated;
 -- Streak maths is internal: the dashboard and app_checkin expose the number.
 revoke all on function app_checkin_streak(uuid) from public, anon, authenticated;
+-- Day-due maths is internal: the dashboard exposes days_paid, settle uses it.
+revoke all on function app_cycle_day_due(timestamptz, integer) from public, anon, authenticated;
 
 -- ============================================================================
 -- Public marketing reads (no session required)
@@ -679,11 +742,10 @@ language sql stable security definer set search_path = public as $$
       'referral_commission_l2_percent', app_setting_num('referral_commission_l2_percent', 1),
       'signup_bonus', app_setting_num('signup_bonus', 1500),
       'withdraw_window_from', app_setting_text('withdraw_window_from', '09:00'),
-      'withdraw_window_to', app_setting_text('withdraw_window_to', '21:00'),
+      'withdraw_window_to', app_setting_text('withdraw_window_to', '22:00'),
       'timezone', app_setting_text('timezone', 'Africa/Kampala'),
       'withdrawals_open', app_withdrawals_open(),
       'settlement_hour', app_setting_text('settlement_hour', '22:00'),
-      'lock_at', app_setting_text('lock_at', '19:45'),
       'platform_paused', app_setting_bool('platform_paused', false)),
     'products', (select coalesce(jsonb_agg(jsonb_build_object(
         'slug', p.slug, 'name', p.name, 'min_principal', p.min_principal,

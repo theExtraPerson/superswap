@@ -189,3 +189,8 @@ Reference information architecture (superswca-style), one screen per bottom tab 
 - Platform freeze + per-account ban are enforced inside the money RPCs.
 
 For concrete column lists, the full RPC/settings/status catalogues, the exact five-plan earnings table and the env-var set, see [reference.md](reference.md).
+
+
+Implement the daily-credit engine: add days_paid/last_paid_at to vault_cycles, rewrite app_settle_matured into a pay_due_days loop with per-day earning ledger rows, schedule it via pg_cron, keep /api/settle as manual fallback, and update the product terms copy to say credited daily at 22:00.
+then once the product is running, it should show progress in days completeed [day 3 of 15] 
+also fix the 0g9fs2td46e9u.js:1  POST https://superswap-seven.vercel.app/api/vaults/open 503 (Service Unavailable): Money movement is locked 19:45:00-21:45:00 each day while the books close. only withdrawals are closed between 22:00 - 9:00 [just like the bank], but deposits, investment and other money moves are open throughout

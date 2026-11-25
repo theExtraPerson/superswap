@@ -7,7 +7,8 @@ import type { CheckinResult } from "@/lib/api/types";
  * Replay-safe inside Postgres via the (user_id, day) primary key on
  * checkin_log, so retries and refreshes can never double-credit. The reward
  * amount is the platform_settings.checkin_bonus authority, a plain wallet
- * credit like the welcome bonus; pause/daily-lock apply.
+ * credit like the welcome bonus; the platform pause applies (no daily lock —
+ * only withdrawals keep office hours).
  */
 export async function POST(req: Request) {
   await connection(); // per-request under cacheComponents; never prerendered

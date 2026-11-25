@@ -4,18 +4,21 @@ import { CRON_SECRET, SUPABASE_SERVICE_ROLE_KEY } from "@/lib/supabase/config";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 /**
- * /api/settle — the daily vault settlement run (and the on-demand button).
+ * /api/settle — the manual/operator settlement trigger (fallback runner).
  *
- * Both verbs run the exact same body:
- *   GET  — how Vercel Cron calls it (vercel.json → crons → path). When the
- *          project has a CRON_SECRET env var, Vercel auto-attaches
- *          `Authorization: Bearer <CRON_SECRET>` to every cron request, so the
- *          bearer guard below authorizes it with no extra config.
+ * The PRIMARY schedule now lives in the database: a pg_cron job
+ * ('vault-daily-credits', see migrations/2026-11-26-daily-vault-credits.sql)
+ * calls app_settle_matured() daily at 22:05 EAT without an HTTP hop. This
+ * route stays as the on-demand fallback (operator button, curl, or a bridge
+ * until pg_cron is confirmed on the project):
+ *   GET  — kept for Vercel Cron compatibility (if a cron entry is ever
+ *          re-added, Vercel auto-attaches `Authorization: Bearer <CRON_SECRET>`).
  *   POST — the manual/operator trigger (same bearer guard).
  *
- * app_settle_matured() is idempotent per cycle, so a double fire (or a retry
- * after a partial run) can never pay a member twice. The service-role key is
- * the ONLY privileged credential this app uses, and only here.
+ * app_settle_matured() credits one idempotent ledger row per cycle-day
+ * ('vault_earn:<cycle>:<day>'), so a double fire (or a retry after a partial
+ * run) can never pay a member twice. The service-role key is the ONLY
+ * privileged credential this app uses, and only here.
  */
 async function runSettlement(req: Request) {
   await connection(); // per-request under cacheComponents; never prerendered

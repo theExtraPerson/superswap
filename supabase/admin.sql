@@ -681,8 +681,7 @@ language sql stable as $$
     ('checkin_bonus',          'number', 'Daily check-in reward (UGX)',  'Credited once per platform-timezone day from the Home tab. 0 disables.'),
     ('referral_commission_percent', 'number', 'Referral commission L1 (%)', 'Paid to the direct referrer on EVERY confirmed deposit by their referee. 0 disables.'),
     ('referral_commission_l2_percent', 'number', 'Referral commission L2 (%)', 'Paid to the referrer''s own referrer (2nd generation) on EVERY confirmed deposit. 0 disables.'),
-    ('settlement_hour',        'time',   'Settlement hour (HH:MM)',      'Vaults mature at this wall-clock hour in the rules timezone; pg_cron releases payouts daily right after it.'),
-    ('lock_at',                'time',   'Daily lock start (HH:MM)',     'All money movement locked for 2 hours from this time. Uses the database clock (UTC on Supabase), not the timezone above.'),
+    ('settlement_hour',        'time',   'Settlement hour (HH:MM)',      'Each vault day''s earning matures at this wall-clock hour in the rules timezone; pg_cron releases the daily credits minutes after it.'),
     ('platform_paused',        'bool',   'Pause money movement',         'Blocks deposits/withdrawals/vault operations (reads keep working).'),
     ('pause_message',          'text',   'Pause message',                'Shown to members while paused.'),
     ('support_contact',        'text',   'Support contact',              'Shown in member UI.'),
@@ -745,7 +744,7 @@ begin
 
   -- The window must stay usable; raising aborts the whole transaction.
   if p_key in ('withdraw_window_from', 'withdraw_window_to') then
-    if app_setting_time('withdraw_window_from', '09:00') >= app_setting_time('withdraw_window_to', '21:00') then
+    if app_setting_time('withdraw_window_from', '09:00') >= app_setting_time('withdraw_window_to', '22:00') then
       raise exception 'INVALID_REQUEST: The withdrawal window must open before it closes.';
     end if;
   end if;

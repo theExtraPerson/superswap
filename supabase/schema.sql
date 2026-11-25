@@ -69,9 +69,8 @@ insert into platform_settings (key, value) values
   ('checkin_bonus', '100'),               -- UGX, daily check-in reward on the Home tab; 0 disables
   ('timezone', 'Africa/Kampala'),         -- IANA zone the member-facing clock rules use
   ('withdraw_window_from', '09:00'),      -- withdrawals open (wall clock in `timezone`)
-  ('withdraw_window_to', '21:00'),        -- withdrawals close (wall clock in `timezone`)
-  ('settlement_hour', '22:00'),           -- vaults mature at this hour on the `timezone` wall clock
-  ('lock_at', '19:45'),                   -- daily money-movement lock window (DB clock, UTC on Supabase)
+  ('withdraw_window_to', '22:00'),        -- withdrawals close (bank hours; deposits/vaults run 24/7)
+  ('settlement_hour', '22:00'),           -- each vault day's earning matures at this wall-clock hour
   ('platform_paused', 'false'),
   ('pause_message', ''),
   ('support_contact', ''),
@@ -103,17 +102,19 @@ create table if not exists vault_products (
 -- Each plan has a FIXED swap amount (min = max), so members commit the exact
 -- principal shown. total_rate_pct is the TOTAL profit over the term, expressed
 -- against that principal (e.g. Spark: 22,500 profit on 10,000 = 225%).
+-- The yield is CREDITED DAILY at settlement_hour (22:00 EAT): promised_yield /
+-- duration_days lands every day; the final credit also returns the principal.
 insert into vault_products (slug, name, min_principal, max_principal, duration_days, total_rate_pct, early_exit_percent, terms) values
   ('spark',  'Spark',  10000,  10000,  10, 225.000, 90,
-   'Swap 10,000 UGX · earn 2,250 daily for 10 days · total profit 22,500. Yield is fixed at opening and paid in full at maturity. Early exit returns 90% of principal; unearned yield is forfeited.'),
+   'Swap 10,000 UGX · credited daily at 22:00: 2,250 UGX every day for 10 days · total profit 22,500. Your principal returns with the final credit. Early exit returns 90% of principal; unearned yield is forfeited.'),
   ('comet',  'Comet',  30000,  30000,  15, 300.000, 90,
-   'Swap 30,000 UGX · earn 6,000 daily for 15 days · total profit 90,000. Yield is fixed at opening and paid in full at maturity. Early exit returns 90% of principal; unearned yield is forfeited.'),
+   'Swap 30,000 UGX · credited daily at 22:00: 6,000 UGX every day for 15 days · total profit 90,000. Your principal returns with the final credit. Early exit returns 90% of principal; unearned yield is forfeited.'),
   ('nova',   'Nova',   80000,  80000,  20, 546.875, 90,
-   'Swap 80,000 UGX · total profit 437,500 over the term. Yield is fixed at opening and paid in full at maturity. Early exit returns 90% of principal; unearned yield is forfeited.'),
+   'Swap 80,000 UGX · credited daily at 22:00: 21,875 UGX every day for 20 days · total profit 437,500. Your principal returns with the final credit. Early exit returns 90% of principal; unearned yield is forfeited.'),
   ('quasar', 'Quasar', 150000, 150000, 25, 500.000, 90,
-   'Swap 150,000 UGX · total profit 750,000 over the term. Yield is fixed at opening and paid in full at maturity. Early exit returns 90% of principal; unearned yield is forfeited.'),
+   'Swap 150,000 UGX · credited daily at 22:00: 30,000 UGX every day for 25 days · total profit 750,000. Your principal returns with the final credit. Early exit returns 90% of principal; unearned yield is forfeited.'),
   ('galaxy', 'Galaxy', 300000, 300000, 30, 500.900, 90,
-   'Swap 300,000 UGX · earn 50,090 daily for 30 days · total profit 1,502,700. Yield is fixed at opening and paid in full at maturity. Early exit returns 90% of principal; unearned yield is forfeited.')
+   'Swap 300,000 UGX · credited daily at 22:00: 50,090 UGX every day for 30 days · total profit 1,502,700. Your principal returns with the final credit. Early exit returns 90% of principal; unearned yield is forfeited.')
 on conflict (slug) do nothing;
 
 -- ----------------------------------------------------------------------------
@@ -162,7 +163,7 @@ create table if not exists ledger (
   amount numeric(16,2) not null,                      -- signed; wallet delta
   kind text not null check (kind in (
     'deposit_credit', 'withdrawal_debit', 'withdrawal_reversal',
-    'vault_debit', 'vault_payout', 'vault_exit_credit',
+    'vault_debit', 'vault_earning', 'vault_payout', 'vault_exit_credit',
     'referral_reward', 'referral_reward_l2', 'bonus_credit', 'checkin_bonus',
     'adjustment_credit', 'adjustment_debit')),
   balance_after numeric(16,2) not null,
@@ -180,7 +181,7 @@ create index if not exists ledger_user_created_idx on ledger (user_id, created_a
 alter table ledger drop constraint if exists ledger_kind_check;
 alter table ledger add constraint ledger_kind_check check (kind in (
     'deposit_credit', 'withdrawal_debit', 'withdrawal_reversal',
-    'vault_debit', 'vault_payout', 'vault_exit_credit',
+    'vault_debit', 'vault_earning', 'vault_payout', 'vault_exit_credit',
     'referral_reward', 'referral_reward_l2', 'bonus_credit', 'checkin_bonus',
     'adjustment_credit', 'adjustment_debit'));
 
@@ -196,7 +197,8 @@ create table if not exists checkin_log (
 );
 
 -- ----------------------------------------------------------------------------
--- 5. Vault cycles — terms locked at opening via snapshot
+-- 5. Vault cycles — terms locked at opening via snapshot; yield paid DAILY
+--    (one ledger row per due day, principal back with the final credit).
 -- ----------------------------------------------------------------------------
 create table if not exists vault_cycles (
   id bigint generated always as identity primary key,
@@ -207,6 +209,12 @@ create table if not exists vault_cycles (
   total_rate_pct numeric(8,3) not null,
   promised_yield numeric(16,2) not null check (promised_yield >= 0),
   payout_total numeric(16,2) not null check (payout_total = principal + promised_yield),
+  -- Daily-credit engine: the yield drips one day at a time at settlement_hour.
+  -- days_paid counts credited days (0-based, completes at duration_days),
+  -- yield_paid accumulates the exact credited sum, last_paid_at stamps the run.
+  days_paid integer not null default 0 check (days_paid >= 0),
+  yield_paid numeric(16,2) not null default 0 check (yield_paid between 0 and promised_yield),
+  last_paid_at timestamptz,
   status text not null default 'open'
     check (status in ('open', 'closed', 'exited', 'void')),
   opened_at timestamptz not null default now(),

@@ -20,6 +20,23 @@ function termPct(cycle: CycleRow, now: number): number {
   return Math.min(100, Math.max(0, ((now - from) / (to - from)) * 100));
 }
 
+/** Day counter from the daily-credit engine; null on a DB that predates it. */
+function cycleDays(cycle: CycleRow, products: ProductRow[]): { done: number; total: number } | null {
+  const total =
+    Number(cycle.duration_days) ||
+    Number(products.find((p) => p.id === cycle.product_id)?.duration_days) ||
+    0;
+  if (!Number.isFinite(total) || total <= 0) return null;
+  return { done: Math.min(total, Math.max(0, Number(cycle.days_paid ?? 0))), total };
+}
+
+/** Prefer real credited days for the bar; fall back to the wall clock. */
+function progressPct(cycle: CycleRow, now: number, products: ProductRow[]): number {
+  const days = cycleDays(cycle, products);
+  if (days) return (days.done / days.total) * 100;
+  return termPct(cycle, now);
+}
+
 export function VipSection({ desk }: { desk: MemberDeskApi }) {
   const d = desk.data!;
   // One render-time stamp (not Date.now() per row) for progress + maturity hints.
@@ -67,17 +84,21 @@ export function VipSection({ desk }: { desk: MemberDeskApi }) {
               </div>
             </div>
             <div className="text-right">
-              <div className="money-hero !text-2xl text-white">{Math.round(termPct(active, now))}%</div>
-              <div className="text-[10px] text-white/70">term elapsed</div>
+              <div className="money-hero !text-2xl text-white">{Math.round(progressPct(active, now, d.products))}%</div>
+              <div className="text-[10px] text-white/70">
+                {cycleDays(active, d.products)
+                  ? `Day ${cycleDays(active, d.products)!.done} of ${cycleDays(active, d.products)!.total}`
+                  : "term elapsed"}
+              </div>
             </div>
           </div>
           <div className="progress mt-3 !bg-black/25 !border-white/15">
-            <span style={{ width: `${termPct(active, now)}%` }} />
+            <span style={{ width: `${progressPct(active, now, d.products)}%` }} />
           </div>
           <div className="mt-2 flex items-center justify-between text-[11px] text-white/80">
             <span>Matures {fmtDate(active.matures_at)}</span>
             <span>
-              Payout <b className="text-white">{fmtUGX(active.payout_total)}</b>
+              Earned <b className="text-white">{fmtUGX(active.yield_paid ?? 0)}</b> / {fmtUGX(active.promised_yield)}
             </span>
           </div>
           {openCycles.length > 1 && (
@@ -114,17 +135,19 @@ export function VipSection({ desk }: { desk: MemberDeskApi }) {
               {/* Product progress: this product's open cycle, if any */}
               {(() => {
                 const c = openCycles.find((x) => x.product_id === p.id);
-                return c ? (
+                if (!c) return null;
+                const days = cycleDays(c, d.products);
+                return (
                   <div className="mt-2.5">
                     <div className="flex justify-between text-[10px] text-[#92a0b9] mb-1">
                       <span>cycle in progress</span>
-                      <span>{Math.round(termPct(c, now))}% elapsed</span>
+                      <span>{days ? `Day ${days.done} of ${days.total}` : `${Math.round(termPct(c, now))}% elapsed`}</span>
                     </div>
                     <div className="progress">
-                      <span style={{ width: `${termPct(c, now)}%` }} />
+                      <span style={{ width: `${progressPct(c, now, d.products)}%` }} />
                     </div>
                   </div>
-                ) : null;
+                );
               })()}
               <button
                 onClick={() => setProductId(productId === p.id ? null : p.id ?? null)}
@@ -196,7 +219,7 @@ export function VipSection({ desk }: { desk: MemberDeskApi }) {
         {d.cycles.length === 0 && <p className="text-xs text-[#92a0b9]">No plans yet. Start one above.</p>}
         <div className="space-y-2">
           {d.cycles.map((c) => (
-            <CycleCard key={c.id} cycle={c} desk={desk} now={now} />
+            <CycleCard key={c.id} cycle={c} desk={desk} now={now} products={d.products} />
           ))}
         </div>
       </section>
@@ -204,9 +227,10 @@ export function VipSection({ desk }: { desk: MemberDeskApi }) {
   );
 }
 
-function CycleCard({ cycle, desk, now }: { cycle: CycleRow; desk: MemberDeskApi; now: number }) {
+function CycleCard({ cycle, desk, now, products }: { cycle: CycleRow; desk: MemberDeskApi; now: number; products: ProductRow[] }) {
   const [exiting, setExiting] = useState(false);
   const open = cycle.status === "open";
+  const days = cycleDays(cycle, products);
 
   return (
     <div className="card-grad !rounded-xl p-4">
@@ -236,17 +260,23 @@ function CycleCard({ cycle, desk, now }: { cycle: CycleRow; desk: MemberDeskApi;
         <>
           <div className="mt-3">
             <div className="flex justify-between text-[10px] text-[#92a0b9] mb-1">
-              <span>term progress</span>
-              <span>{Math.round(termPct(cycle, now))}%</span>
+              <span>{days ? `Day ${days.done} of ${days.total}` : "term progress"}</span>
+              <span>{Math.round(progressPct(cycle, now, products))}%</span>
             </div>
             <div className="progress">
-              <span style={{ width: `${termPct(cycle, now)}%` }} />
+              <span style={{ width: `${progressPct(cycle, now, products)}%` }} />
             </div>
           </div>
+          {days && (
+            <div className="mt-1.5 text-[10.5px] text-[#92a0b9]">
+              Earned {fmtUGX(cycle.yield_paid ?? 0)} · next credit daily at{" "}
+              {desk.data!.rules.settlement_hour || "22:00"}
+            </div>
+          )}
           <div className="mt-3 flex items-center gap-2">
             {new Date(cycle.matures_at).getTime() <= now ? (
               <span className="text-[11px] text-emerald-300">
-                Matured — payout is credited at today&apos;s settlement hour.
+                Matured — the final credit + principal land at today&apos;s settlement hour.
               </span>
             ) : (
               <>
