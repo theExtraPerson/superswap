@@ -41,6 +41,25 @@ export function useMemberDesk() {
     void load();
   }, [load]);
 
+  // Deposits are automatic: the wallet credits itself when the signed Shashura
+  // callback lands, which is typically seconds after the member approves the
+  // PIN prompt. Rather than make them refresh by hand, quietly re-poll while a
+  // deposit is still pending and young. Bounded to 30 minutes so a request that
+  // genuinely needs admin reconciliation (the webhook never came) stops firing
+  // background reads — the desk is the fallback there, not endless polling.
+  const pendingDeposits =
+    data?.deposits.filter(
+      (dep) =>
+        dep.status === "pending" &&
+        Date.now() - new Date(dep.created_at).getTime() < 30 * 60 * 1000
+    ).length ?? 0;
+
+  useEffect(() => {
+    if (pendingDeposits === 0) return;
+    const t = setInterval(() => void load(), 15_000);
+    return () => clearInterval(t);
+  }, [pendingDeposits, load]);
+
   // Welcome bonus safety net. Sign-in claims it server-side, but a session
   // that predates the promo never passed through /api/auth/login — so try once
   // per desk mount. The claim is replay-safe in SQL; a reload only happens when

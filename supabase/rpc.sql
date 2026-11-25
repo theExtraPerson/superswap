@@ -438,31 +438,62 @@ begin
 end $$;
 
 -- Cron (also admin-runnable): close matured open vaults, credit full payouts.
--- Safe any time; pays out at most once per cycle. Supabase pg_cron fires it
--- daily at 22:05 EAT (see 2026-11-24-referral-league-and-eat-settlement.sql);
--- POST /api/settle remains the manual/external fallback.
+-- Safe any time; pays out at most once per cycle. Vercel Cron fires this daily
+-- at 22:05 EAT via POST/GET /api/settle (see vercel.json); the manual route
+-- remains the on-demand fallback.
+--
+-- Hardened so a single bad cycle can never stall the whole run:
+--   * drains EVERY matured cycle (no 500 cap) — one missed day is fully
+--     recovered on the next tick, no backlog left open;
+--   * credits each cycle inside its own sub-transaction, so one failure skips
+--     that cycle and continues with the rest;
+--   * treats ledger.idem_key 'vault_payout:<cycle id>' as the source of truth
+--     for "already paid": a cycle credited by a run that then crashed before
+--     flipping it to 'closed' is simply closed, never credited twice.
 create or replace function app_settle_matured() returns jsonb
 language plpgsql security definer set search_path = public as $$
 declare
   v_cycle vault_cycles;
-  v_count integer := 0;
+  v_settled integer := 0;
   v_total numeric(16,2) := 0;
+  v_closed integer := 0;
+  v_failed integer := 0;
 begin
   for v_cycle in
     select * from vault_cycles
       where status = 'open' and matures_at <= now()
-      order by matures_at for update skip locked limit 500
+      order by matures_at
+      for update skip locked
   loop
-    perform app_credit(v_cycle.user_id, v_cycle.payout_total, 'vault_payout',
-                       'vault_cycles', v_cycle.id,
-                       'Maturity ' || (v_cycle.product_snapshot ->> 'name'),
-                       'vault_payout:' || v_cycle.id);
-    update vault_cycles set status = 'closed', closed_at = now() where id = v_cycle.id;
-    v_count := v_count + 1;
-    v_total := v_total + v_cycle.payout_total;
+    -- Credited by an earlier run that died before closing it: finish the job,
+    -- do not pay again.
+    if exists (select 1 from ledger
+               where idem_key = 'vault_payout:' || v_cycle.id and kind = 'vault_payout') then
+      update vault_cycles set status = 'closed', closed_at = coalesce(closed_at, now())
+        where id = v_cycle.id;
+      v_closed := v_closed + 1;
+      continue;
+    end if;
+
+    begin
+      perform app_credit(v_cycle.user_id, v_cycle.payout_total, 'vault_payout',
+                         'vault_cycles', v_cycle.id,
+                         'Maturity ' || (v_cycle.product_snapshot ->> 'name'),
+                         'vault_payout:' || v_cycle.id);
+      update vault_cycles set status = 'closed', closed_at = now() where id = v_cycle.id;
+      v_settled := v_settled + 1;
+      v_total := v_total + v_cycle.payout_total;
+    exception when others then
+      -- One unreachable member / bad row must not abort the settlement of all
+      -- the others. Log it, leave the cycle open for the operator, keep going.
+      raise notice 'app_settle_matured: cycle % skipped (%)', v_cycle.id, SQLERRM;
+      v_failed := v_failed + 1;
+    end;
   end loop;
-  return jsonb_build_object('settled', v_count, 'paid_total', v_total);
+  return jsonb_build_object('settled', v_settled, 'paid_total', v_total,
+                            'closed', v_closed, 'failed', v_failed);
 end $$;
+
 
 -- ---------------------------------------------------------------- deposits
 -- Records the intent; a momo deposit then rides the Shashura requestToPay

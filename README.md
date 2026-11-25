@@ -9,10 +9,12 @@ honest version of the same mechanics —
   (never a "daily" rate). The float that backs every payout is held in the
   external Shashura account, which the application does not mirror — there is
   no in-app reserve balance or coverage number.
-- **One-level (L1) referral commission + a one-time welcome bonus.** The
-  referrer earns a percent of every deposit their referee makes; new members
-  are credited a flat bonus at sign-in. Both are operator-funded promotions
-  that ride outside vault yield — no commission on commissions, ever.
+- **Two-level referral commission (L1 + L2) + a one-time welcome bonus.** The
+  direct referrer (L1) earns a percent of every deposit their referee makes, and
+  the referrer's own upline (L2) earns a smaller percent on the same deposit;
+  new members are credited a flat bonus at sign-in. Both ride on deposit
+  settlement (see `app_deposit_credited_core`) and are operator-funded promos
+  outside vault yield — no commission on commissions, ever.
 - **Withdrawal desk hours.** Withdrawal requests are only taken inside a
   published window on the platform timezone (deposits and vault operations are
   not windowed; the separate daily books-close lock still applies).
@@ -55,9 +57,10 @@ Apply in order against your project (SQL editor or `supabase db push`):
    `app_public_info`. `app_obligations()` reports member liability (wallets +
    open-vault payouts) to the admin desk; there is no coverage ratio or
    solvency gate because the backing float is external and not mirrored here.
-   `app_settle_matured()` is the idempotent settlement body — Supabase pg_cron
-   fires it daily at 22:05 EAT (vaults mature on the `timezone` wall clock at
-   `settlement_hour`). Clock rules go through
+   `app_settle_matured()` is the idempotent settlement body — Vercel Cron fires
+   it daily at 22:05 EAT via `GET /api/settle` (vaults mature on the `timezone`
+   wall clock at `settlement_hour`). It drains every matured cycle and guards
+   each credit in its own sub-transaction, so one bad row can never stall the run. Clock rules go through
    `app_clock()` (wall clock in the `timezone` setting), the withdrawal window
    gate is `app_assert_withdrawal_window()`, and promo credits go through
    `app_promo_credit()` — a plain, idempotent wallet credit.
@@ -136,15 +139,17 @@ Uniform envelope `{ data } | { error: { code, message } }`.
 | `POST /api/bonus/welcome` | `app_claim_signup_bonus` (replay-safe) | member |
 | `POST /api/vaults/open` · `/exit` | `app_open_vault` / `app_exit_vault` | member |
 | `POST /api/deposits` · `/withdrawals` | `app_open_deposit` / `app_open_withdrawal` | member |
-| `POST /api/settle` | `app_settle_matured` | `Bearer $CRON_SECRET` (service-role) |
+| `GET/POST /api/settle` | `app_settle_matured` | `Bearer $CRON_SECRET` (service-role) |
 | `/api/admin/*` (self, dashboard, queue, settle, members, products, settings, admins, audit) | `app_admin_*` | admin (guard in SQL) |
 
-Scheduling: Supabase pg_cron (registered by
-`supabase/migrations/2026-11-24-referral-league-and-eat-settlement.sql`) releases
-all matured payouts daily at 22:05 EAT — Vercel Cron is deprecated. Any external
-timer may also fire the same idempotent run:
-`POST /api/settle` with `Authorization: Bearer $CRON_SECRET`. The service-role
-key is used **only** there.
+Scheduling: **Vercel Cron** (`vercel.json`) fires `GET /api/settle` daily at
+22:05 EAT (`5 19 * * *` in UTC), which runs the idempotent `app_settle_matured()`.
+When the project defines a `CRON_SECRET` env var, Vercel auto-attaches
+`Authorization: Bearer $CRON_SECRET` to every cron request — no header to
+configure. The same run can be fired by hand at any time:
+`curl -X POST -H "Authorization: Bearer $CRON_SECRET" https://<host>/api/settle`.
+The service-role key is used **only** there. (Supabase `pg_cron` was retired;
+`2026-11-25-vault-settlement-repair.sql` unschedules it if present.)
 
 ## Screens
 
@@ -171,7 +176,7 @@ and the settings form render from that whitelist — nothing to patch in the UI.
 Current values: min deposit 10 000 · min withdrawal 5 000 · withdrawal fee 17% ·
 withdrawal window 09:00–21:00 `Africa/Kampala` · welcome bonus 1 500 UGX ·
 L1 referral commission 18% · L2 referral commission 1% · settlement 22:00 EAT
-(payouts released 22:05 EAT by pg_cron) · daily lock 19:45 (2 h, database
+(payouts released 22:05 EAT by Vercel Cron) · daily lock 19:45 (2 h, database
 clock).
 
 ## Develop
@@ -195,3 +200,81 @@ npm run build ; npm run lint
 - Point the merchant line in the deposit copy at a real receivable account.
 - Rates: keep total-over-term honest; growth is bounded by the operator's
   externally funded reserve — that is the intended trade-off.
+
+## Deploying a migration (required for money-path changes)
+
+The money rules live in Postgres, not the app bundle, so code changes alone do
+not fix settlement — the SQL must be re-deployed to the Supabase project. The
+service-role key only reaches PostgREST (`SELECT`/RPC); it **cannot run DDL**, so
+apply migrations with a real database connection:
+
+```bash
+npx supabase link --project-ref <ref>     # once; prompts for the DB password
+npx supabase db push                      # applies supabase/migrations/* in order
+```
+
+If the CLI is unavailable, paste the migration file into the Supabase Dashboard
+→ SQL Editor and run it. Every migration here is idempotent and safe to re-run.
+
+Pending as of 2026-11-25:
+- **`supabase/migrations/2026-11-25-settlement-hash-repair.sql`** — until applied,
+  every deposit/withdrawal settlement (and the L1/L2 referral commission) still
+  dies on the pgcrypto `digest()` search_path fault and returns 500.
+- **`supabase/migrations/2026-11-25-vault-settlement-repair.sql`** — hardens
+  `app_settle_matured()`, retires the `pg_cron` job, and **credits every overdue
+  open vault on the spot** (the missed 22:05 rewards).
+
+After applying them, redeploy the app so the new admin desk and the `/api/settle`
+GET handler ship alongside the repaired functions.
+
+## Setting up the Vercel Cron schedule (22:05 EAT daily)
+
+`vercel.json` already declares the job; deploying it wires the timer:
+
+```json
+{ "crons": [{ "path": "/api/settle", "schedule": "5 19 * * *" }] }
+```
+
+- **`schedule` is UTC.** `5 19 * * *` = 19:05 UTC = **22:05 EAT** year-round
+  (Kampala has no DST). It runs five minutes after the 22:00 settlement hour so
+  every cycle maturing that evening has already crossed `matures_at`.
+- **`CRON_SECRET` must be a Project Environment Variable** (Production) — the
+  same value as in `.env.local`. Vercel then auto-sends
+  `Authorization: Bearer $CRON_SECRET`, which the route checks.
+
+Steps:
+1. Vercel Dashboard → your project → **Settings → Environment Variables** →
+   add `CRON_SECRET` (and confirm `SUPABASE_SERVICE_ROLE_KEY`,
+   `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY` exist) for
+   **Production**.
+2. Commit `vercel.json` and **deploy**. Vercel reads `crons` on deploy.
+3. Verify: Vercel Dashboard → project → **Cron Jobs** tab shows the schedule and
+   the next run time; after it fires, check **Logs** for the
+   `[settle] {"settled":…,"paid_total":…}` line.
+4. Test on demand without waiting: 
+   `curl -X POST -H "Authorization: Bearer $CRON_SECRET" https://<host>/api/settle`.
+
+Caveats: on the **Hobby** plan Vercel allows only **one** cron and runs it at
+most **once per day** (firing can drift a few minutes from the top of the slot);
+**Pro** allows up to 100 and finer intervals. Because the run is idempotent and
+now drains the full backlog each tick, a skipped or delayed day self-heals.
+
+## Admin reconciliation workflow
+
+Deposits settle themselves when the signed Shashura callback lands; the member's
+balance credits automatically and L1/L2 commission pays in the same core. The
+webhook is a promise, not a guarantee, so the Queues desk holds the human
+fallback:
+
+- **Reconcile queue** — one enquiry sweep over every pending row that already has
+  a gateway reference, pushing each final result through the same
+  `app_hook_shashura` funnel (so it still pays commission). Clears a webhook
+  backlog in one click.
+- **Approve (credit now)** — manual override that confirms a single deposit and
+  credits the wallet + both commission generations via `app_admin_confirm_deposit`.
+- **Reject** — declines a stale or mismatched deposit (reason required, audited).
+- **Check status** — re-polls one transaction by its Shashura reference.
+
+Only a deposit whose gateway attempt genuinely **failed** raises the desk popup;
+healthy requests waiting on the webhook stay quiet rows.
+

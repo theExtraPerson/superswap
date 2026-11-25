@@ -26,11 +26,12 @@ export interface DeskApi {
   reload: () => void;
   search: string;
   setSearch: (q: string) => void;
-  /** Run a desk mutation; returns true on success, surfaces errors via errorMsg. */
+  /** Run a desk mutation; returns true on success, surfaces errors via errorMsg.
+   * onDone receives the resolved value so sweeps (e.g. reconcile) can report counts. */
   mutate: (
     label: string,
     fn: (cfg: ApiConfig) => Promise<unknown>,
-    onDone?: () => void
+    onDone?: (result: unknown) => void
   ) => Promise<boolean>;
 }
 
@@ -91,11 +92,11 @@ export function useDesk(): DeskApi {
   }, [load]);
 
   const mutate = useCallback(
-    async (label: string, fn: (cfg: ApiConfig) => Promise<unknown>, onDone?: () => void) => {
+    async (label: string, fn: (cfg: ApiConfig) => Promise<unknown>, onDone?: (result: unknown) => void) => {
       try {
-        await fn(cfg);
+        const res = await fn(cfg);
         setErrorMsg("");
-        onDone?.();
+        onDone?.(res);
         await load();
         return true;
       } catch (e) {

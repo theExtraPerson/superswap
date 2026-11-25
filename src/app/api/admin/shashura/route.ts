@@ -25,6 +25,9 @@ import {
  *       until the callback finalizes it.
  *   { action: "refresh", kind, id }      pull the final state by enquiry —
  *       the fallback when the webhook never arrives (local dev, firewalled).
+ *   { action: "reconcile", kind }        the same enquiry sweep over every
+ *       pending row that already has a gateway reference, so one click
+ *       clears a webhook backlog (or a webhook that is simply not coming).
  *
  * Identity stays with the operator's own session (admin RPCs); the
  * service-role client is used READ-ONLY here to fetch the row the gateway call
@@ -41,6 +44,16 @@ export async function POST(req: Request) {
 
   const body = await readJson(req);
   if (!body) return fail(422, "INVALID_REQUEST", "Send a JSON body.");
+
+  // The sweep is the only action without a row id.
+  if (body.action === "reconcile") {
+    try {
+      return await reconcile(createAdminClient(), String(body.kind ?? "deposits"));
+    } catch (e) {
+      return gatewayFail(e);
+    }
+  }
+
   const id = positiveInt(body.id);
   if (!id) return fail(422, "INVALID_REQUEST", "id is required.");
 
@@ -61,6 +74,8 @@ export async function POST(req: Request) {
     return gatewayFail(e);
   }
 }
+
+const sb0 = () => createAdminClient();
 
 type Session = Parameters<typeof callRpc>[0];
 
@@ -127,8 +142,9 @@ async function payWithdrawal(sb: ReturnType<typeof createAdminClient>, client: S
 
 /** Enquiry fallback: synthesize the finalized event and run it through the
  * same webhook funnel, so there is exactly one settlement code path. */
-async function refresh(sb: ReturnType<typeof createAdminClient>, kind: string, id: number) {
-  if (kind !== "deposits" && kind !== "withdrawals") {
+async function refresh(sb: ReturnType<typeof createAdminClient>, kindRaw: string, id: number) {
+  const kind = kindRaw === "deposits" || kindRaw === "withdrawals" ? kindRaw : null;
+  if (!kind) {
     return fail(422, "INVALID_REQUEST", "kind must be deposits or withdrawals.");
   }
   const { data: row, error } = await sb
@@ -142,7 +158,84 @@ async function refresh(sb: ReturnType<typeof createAdminClient>, kind: string, i
 
   const q = await enquiry(String(identifier));
   if (q.state === "PENDING") return ok({ state: "PENDING", enquiry: q });
+  const applied = await applyFinalized(sb, kind, row, q);
+  if (applied.error) return applied.error;
+  return ok({ state: q.state, applied: applied.data });
+}
 
+/**
+ * Backlog clear: one enquiry per pending row that already has a gateway
+ * reference, each final result pushed through app_hook_shashura — the same
+ * funnel the signed callback uses, so a webhook that is late (or never coming,
+ * as when the callback URL is not registered at Shashura) settles identically
+ * and still pays L1/L2 referral commission. Bounded and sequential: the gateway
+ * is a third party and each row costs one HTTP call. Already-final rows are
+ * skipped, so re-running the sweep is cheap.
+ */
+async function reconcile(sb: ReturnType<typeof createAdminClient>, kindRaw: string) {
+  const kind = kindRaw === "deposits" || kindRaw === "withdrawals" ? kindRaw : null;
+  if (!kind) {
+    return fail(422, "INVALID_REQUEST", "kind must be deposits or withdrawals.");
+  }
+  const { data: rows, error } = await sb
+    .from(kind)
+    .select("id, gateway_ref, gateway_tid, gateway_state")
+    .eq("status", "pending")
+    .not("gateway_ref", "is", null)
+    .order("created_at", { ascending: true })
+    .limit(25);
+  if (error) {
+    console.error(`[shashura-reconcile] read ${kind}: ${error.message}`);
+    return fail(500, "INTERNAL", "Pending queue could not be read.");
+  }
+
+  const results: { id: number; state: string; note?: string }[] = [];
+  let settled = 0;
+  let failed = 0;
+  let waiting = 0;
+
+  for (const row of rows ?? []) {
+    const identifier = row.gateway_ref ?? row.gateway_tid;
+    if (!identifier) continue;
+    try {
+      const q = await enquiry(String(identifier));
+      if (q.state === "PENDING") {
+        waiting += 1;
+        results.push({ id: row.id, state: "PENDING" });
+        continue;
+      }
+      const applied = await applyFinalized(sb, kind, row, q);
+      if (applied.error) {
+        results.push({ id: row.id, state: q.state, note: "not applied" });
+        continue;
+      }
+      if (q.state === "TS") settled += 1;
+      else failed += 1;
+      results.push({ id: row.id, state: q.state });
+    } catch (e) {
+      // A single bad reference must not abort the sweep.
+      const why = e instanceof ShashuraError ? e.code : "TRANSPORT";
+      console.error(`[shashura-reconcile] ${kind} #${row.id} ${String(e)}`);
+      results.push({ id: row.id, state: "ERROR", note: why });
+    }
+  }
+
+  return ok({
+    checked: results.length,
+    settled,
+    failed,
+    waiting,
+    results,
+  });
+}
+
+/** One enquiry result → one finalized event through the webhook funnel. */
+async function applyFinalized(
+  sb: ReturnType<typeof createAdminClient>,
+  kind: "deposits" | "withdrawals",
+  row: { id: number; gateway_ref?: string | null },
+  q: Awaited<ReturnType<typeof enquiry>>
+): Promise<{ data: unknown; error?: never } | { data?: never; error: Response }> {
   const payload = {
     event: "transaction.finalized",
     environment: SHASHURA_ENV,
@@ -153,12 +246,12 @@ async function refresh(sb: ReturnType<typeof createAdminClient>, kind: string, i
     amount: q.amount,
     ...(q.state === "TF" && q.failure ? { failure: q.failure } : {}),
   };
-  const { data, error: hookError } = await sb.rpc("app_hook_shashura", { p_payload: payload });
-  if (hookError) {
-    console.error(`[shashura-refresh] ${hookError.message}`);
-    return fail(500, "INTERNAL", "Gateway status could not be applied.");
+  const { data, error } = await sb.rpc("app_hook_shashura", { p_payload: payload });
+  if (error) {
+    console.error(`[shashura-refresh] ${kind} #${row.id} ${error.message}`);
+    return { error: fail(500, "INTERNAL", "Gateway status could not be applied.") };
   }
-  return ok({ state: q.state, applied: data });
+  return { data };
 }
 
 /** Shashura faults become the app envelope; codes match the docs' glossary. */

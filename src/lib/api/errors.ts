@@ -35,6 +35,13 @@ const FRIENDLY: Record<string, string> = {
   // synthetic login address can be built. Operator-only fix; 503 on purpose.
   AUTH_NOT_CONFIGURED: "Account sign-in is not fully configured yet. Please try again shortly.",
   INVALID_REQUEST: "The request was malformed.",
+  // The database is behind the code: a missing function/column/table, a CHECK
+  // that refuses the value the app writes, or an ON CONFLICT without its unique
+  // index. Never a member's fault and never fixable by retrying — the operator
+  // must run the latest file in supabase/migrations. The SQLSTATE is published
+  // (it is not secret) so the cause is findable in the server log by tag.
+  DB_SCHEMA_DRIFT:
+    "This action needs a database update. Please tell support — retrying will not help.",
   // Shashura gateway faults (/api/admin/shashura + the webhook). The route
   // already words each one; these only fire if a raw code reaches the mapper.
   GATEWAY_NOT_CONFIGURED: "Shashura payments are not configured on this server yet.",
@@ -45,6 +52,7 @@ const FRIENDLY: Record<string, string> = {
   GATEWAY_ERROR: "Shashura declined the request.",
   GATEWAY_UNAVAILABLE: "Could not reach the Shashura gateway. Try again shortly.",
   INTERNAL: "Something went wrong. Please try again.",
+  NETWORK: "The connection dropped before the server answered. Check your network and retry.",
 };
 
 // HTTP status per code — auth first (401/403), missing rows 404, rule and
@@ -71,6 +79,25 @@ const STATUS: Record<string, number> = {
   GATEWAY_ERROR: 502,
   GATEWAY_UNAVAILABLE: 502,
   INTERNAL: 500,
+  DB_SCHEMA_DRIFT: 500,
+  // Transport never completed (offline, DNS, ERR_NETWORK_CHANGED). Retryable.
+  NETWORK: 503,
+};
+
+/**
+ * SQLSTATEs that mean "the deployed database is older than this app", i.e. a
+ * migration was skipped or a DDL change drifted. Postgres reports these as bare
+ * sentences with no CODE: prefix, so without this table they collapse into an
+ * unactionable 500 — which is exactly how a broken app_hash_sha256 hid for days.
+ */
+const DRIFT_SQLSTATES: Record<string, string> = {
+  "42883": "undefined_function",
+  "42703": "undefined_column",
+  "42P01": "undefined_table",
+  "42P10": "on_conflict_without_unique_index",
+  "23514": "check_constraint_violation",
+  "23502": "not_null_violation",
+  "23503": "foreign_key_violation",
 };
 
 export interface RpcFailure {
@@ -80,16 +107,24 @@ export interface RpcFailure {
 }
 
 /** Parse a raised 'CODE: detail' (or bare Supabase) message into a mapped failure. */
-export function mapRpcError(raw: string | undefined | null): RpcFailure {
+export function mapRpcError(raw: string | undefined | null, sqlstate?: string | null): RpcFailure {
   const text = (raw ?? "Unknown error").trim();
   const head = text.split(":")[0].trim().toUpperCase().replace(/[\s-]+/g, "_");
   const known = head in FRIENDLY;
-  const code = known ? head : "INTERNAL";
+  // A DDL fault carries no CODE: prefix, so the SQLSTATE is the only signal.
+  const drift = known ? undefined : sqlstate ? DRIFT_SQLSTATES[sqlstate] : undefined;
+  const code = known ? head : drift ? "DB_SCHEMA_DRIFT" : "INTERNAL";
   return {
     code,
     // The RPC's own detail carries live figures (balances, minimums) —
-    // keep it when the code is recognised; hide internals otherwise.
-    message: known ? text.slice(head.length + 1).trim() || FRIENDLY[code] : FRIENDLY.INTERNAL,
+    // keep it when the code is recognised; hide internals otherwise. For drift,
+    // publish the SQLSTATE name (never the object names Postgres embeds) so the
+    // operator can match the [rpc-fail] log line to the right migration.
+    message: known
+      ? text.slice(head.length + 1).trim() || FRIENDLY[code]
+      : drift
+        ? `${FRIENDLY.DB_SCHEMA_DRIFT} (${sqlstate} ${drift})`
+        : FRIENDLY.INTERNAL,
     status: STATUS[code] ?? 422,
   };
 }

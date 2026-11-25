@@ -121,7 +121,9 @@ begin
       'withdrawals_total', (select coalesce(sum(payout_amount), 0) from withdrawals where status = 'paid'),
       'fees_total', (select coalesce(sum(fee_amount), 0) from withdrawals where status = 'paid'),
       'bonus_total', (select coalesce(sum(amount), 0) from ledger where kind = 'bonus_credit'),
-      'referral_commission_total', (select coalesce(sum(amount), 0) from ledger where kind = 'referral_reward'),
+      'referral_commission_total', (select coalesce(sum(amount), 0) from ledger where kind in ('referral_reward', 'referral_reward_l2')),
+      'referral_commission_l1', (select coalesce(sum(amount), 0) from ledger where kind = 'referral_reward'),
+      'referral_commission_l2', (select coalesce(sum(amount), 0) from ledger where kind = 'referral_reward_l2'),
       'yield_paid_total', (select coalesce(sum(promised_yield), 0) from vault_cycles where status = 'closed')
     ),
     'members', (
@@ -150,6 +152,10 @@ begin
   );
 end $$;
 
+-- Deposits waiting for a decision. 'needs_action' is the desk's alert rule:
+-- a dead/failed gateway attempt, a verified amount mismatch, or a request that
+-- has been waiting on the webhook for longer than half an hour. Everything
+-- else is a healthy collection that will settle itself and must stay quiet.
 create or replace function app_admin_queue(p_kind text) returns jsonb
 language plpgsql stable security definer set search_path = public as $$
 declare v_uid uuid := app_admin_guard();
@@ -161,6 +167,9 @@ begin
         'settled_at', d.settled_at, 'note', d.note,
         'gateway_ref', d.gateway_ref, 'gateway_tid', d.gateway_tid,
         'gateway_state', d.gateway_state, 'gateway_detail', d.gateway_detail,
+        'waiting_minutes', (extract(epoch from (now() - d.created_at)) / 60)::bigint,
+        'needs_action', (d.gateway_state in ('failed', 'verified')
+                         or d.created_at < now() - interval '30 minutes'),
         'username', p.username, 'display_name', p.display_name, 'phone', p.phone)
         order by d.created_at), '[]'::jsonb)
       from (select * from deposits where status = 'pending' order by created_at limit 100) d

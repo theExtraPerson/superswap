@@ -1,14 +1,17 @@
 "use client";
 
-// Queues — the settlement workbench. Deposits are 100% automatic: momo rows
-// request their own PIN prompt when the member opens them and credit
-// themselves when the signed Shashura callback lands. There is NO manual
-// Confirm here by design — the desk only keeps Reject (abandon a dead request)
-// and Check status (re-sync a webhook that has not landed yet). Withdrawals
-// are ALWAYS approved here: settle manually ("Mark paid") or via the API
-// ("Pay via Shashura" — Airtel settles on the spot, MTN settles when the
-// webhook fires). Both settlement paths run the same SQL cores, so the ledger
-// can't drift between them.
+// Queues — the settlement workbench. Deposits are meant to be automatic: momo
+// rows request their own PIN prompt when the member opens them and credit
+// themselves when the signed Shashura callback lands. Webhooks are a promise,
+// not a guarantee, so the desk keeps the full human set for every pending
+// deposit: APPROVE (confirm_deposit — credits the wallet AND pays L1/L2
+// referral commission through the shared core), REJECT, Re-send request and
+// Check status, plus one Reconcile sweep over the whole pending queue.
+// Nothing about a deposit is announced here unless it actually FAILED — a
+// healthy request that is merely waiting on the gateway stays a quiet row.
+// Withdrawals are ALWAYS approved here: settle manually ("Mark paid") or via
+// the API ("Pay via Shashura"). Both settlement paths run the same SQL cores,
+// so the ledger can't drift between them.
 
 import { useCallback, useEffect, useState } from "react";
 import { Btn, Card } from "@/components/ui";
@@ -18,7 +21,7 @@ import type {
   AdminQueueDepositRow,
   AdminQueueWithdrawalRow,
 } from "@/lib/api/types";
-import { inputCls } from "./parts";
+import { AlertPopup, inputCls } from "./parts";
 import type { DeskApi } from "./useDesk";
 
 type Kind = "deposits" | "withdrawals";
@@ -29,16 +32,35 @@ export function QueuesSection({ desk }: { desk: DeskApi }) {
   const [withdrawals, setWithdrawals] = useState<AdminQueueWithdrawalRow[] | null>(null);
   const [notes, setNotes] = useState<Record<string, string>>({});
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [sweep, setSweep] = useState<string | null>(null);
+  // The failed-deposit popup is raised once per queue load and dismissed by hand.
+  const [alert, setAlert] = useState<AdminQueueDepositRow[] | null>(null);
+  const [seenFailureIds, setSeenFailureIds] = useState<number[]>([]);
 
   const load = useCallback(async () => {
     try {
-      if (kind === "deposits") setDeposits((await adminQueue("deposits", desk.cfg)) as AdminQueueDepositRow[]);
-      else setWithdrawals((await adminQueue("withdrawals", desk.cfg)) as AdminQueueWithdrawalRow[]);
+      if (kind === "deposits") {
+        const rows = (await adminQueue("deposits", desk.cfg)) as AdminQueueDepositRow[];
+        setDeposits(rows);
+        // Only gateway FAILURES interrupt the operator. 'requested' rows are the
+        // webhook doing its job late, and stay silent rows in the list.
+        const fresh = rows.filter(
+          (d) => d.gateway_state === "failed" && !seenFailureIds.includes(d.id)
+        );
+        if (fresh.length) {
+          setAlert(fresh);
+          setSeenFailureIds((ids) => [...ids, ...fresh.map((d) => d.id)]);
+        }
+      } else {
+        setWithdrawals((await adminQueue("withdrawals", desk.cfg)) as AdminQueueWithdrawalRow[]);
+      }
     } catch (e) {
+      // Transient network loss must not blank a queue the operator is working
+      // through — keep the rows and say what happened.
       desk.setErrorMsg(`Queue: ${(e as Error).message}`);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [desk.cfg, kind]);
+  }, [desk.cfg, kind, seenFailureIds]);
 
   useEffect(() => {
     // Intentional fetch-on-mount / on-tab switch; setState happens after the await.
@@ -51,14 +73,16 @@ export function QueuesSection({ desk }: { desk: DeskApi }) {
     setNotes((n) => ({ ...n, [`${kind}:${id}`]: v }));
 
   const act = async (
-    action: "reject_deposit" | "pay_withdrawal" | "fail_withdrawal",
+    action: "confirm_deposit" | "reject_deposit" | "pay_withdrawal" | "fail_withdrawal",
     id: number
   ) => {
     setBusyId(`${action}:${id}`);
     const payload =
       action === "pay_withdrawal"
         ? { action, id, reference: note(id) || undefined }
-        : { action, id, reason: note(id) };
+        : action === "confirm_deposit"
+          ? { action, id, note: note(id) || undefined }
+          : { action, id, reason: note(id) };
     const done = await desk.mutate(action, (cfg) => adminSettle(payload, cfg), () => {
       setNotes((n) => {
         const next = { ...n };
@@ -70,15 +94,28 @@ export function QueuesSection({ desk }: { desk: DeskApi }) {
     setBusyId(null);
   };
 
-  /** Gateway work: push a collection, fire an API payout, or pull the final
-   * state by enquiry when the webhook has not (yet) landed. */
+  /** Gateway work: push a collection, fire an API payout, pull the final
+   * state by enquiry, or sweep the whole pending queue. */
   const gateway = async (
-    action: "pay_withdrawal" | "refresh",
-    id: number
+    action: "pay_withdrawal" | "refresh" | "collect_deposit" | "reconcile",
+    id?: number
   ) => {
-    setBusyId(`${action}:${id}`);
-    const payload = action === "refresh" ? { action, kind, id } : { action, id };
-    const done = await desk.mutate(action, (cfg) => adminShashura(payload, cfg));
+    setBusyId(`${action}:${id ?? "all"}`);
+    setSweep(null);
+    const payload =
+      action === "refresh"
+        ? { action, kind, id: id! }
+        : action === "reconcile"
+          ? { action, kind }
+          : { action, id: id! };
+    const done = await desk.mutate(action, (cfg) => adminShashura(payload, cfg), (res) => {
+      if (action === "reconcile") {
+        const r = (res ?? {}) as { checked?: number; settled?: number; failed?: number; waiting?: number };
+        setSweep(
+          `Checked ${r.checked ?? 0} · settled ${r.settled ?? 0} · failed ${r.failed ?? 0} · still waiting ${r.waiting ?? 0}`
+        );
+      }
+    });
     if (done) await load();
     setBusyId(null);
   };
@@ -104,9 +141,19 @@ export function QueuesSection({ desk }: { desk: DeskApi }) {
 
       {kind === "deposits" && (
         <Card
-          title="Deposits needing attention"
-          hint="Deposits settle themselves the moment the member approves the MoMo prompt — a healthy one never waits here. There is no manual Confirm: if a request went stale or the amount is wrong, Reject it and ask the member to deposit again. Check status re-syncs a callback that has not landed yet."
+          title="Pending deposits"
+          hint="Deposits settle themselves the moment the member approves the MoMo prompt, so a healthy one rarely waits here. When the webhook is late or never lands you hold full authority: Reconcile re-polls every Shashura reference and auto-credits matches (paying L1/L2 commission), Approve credits this one by hand on your assurance, Reject declines it. Check status re-syncs a single callback."
         >
+          <div className="mb-3 flex flex-wrap items-center gap-2">
+            <Btn
+              variant="ghost"
+              disabled={busyId === "reconcile:all"}
+              onClick={() => gateway("reconcile")}
+            >
+              {busyId === "reconcile:all" ? "Reconciling…" : "Reconcile queue (re-poll webhooks)"}
+            </Btn>
+            {sweep ? <span className="text-[11px] text-[#92a0b9]">{sweep}</span> : null}
+          </div>
           {!deposits || deposits.length === 0 ? (
             <p className="text-sm text-[#92a0b9]">Queue is clear.</p>
           ) : (
@@ -138,6 +185,13 @@ export function QueuesSection({ desk }: { desk: DeskApi }) {
                         onChange={(e) => setNote(d.id, e.target.value)}
                       />
                       <Btn
+                        variant="solid"
+                        disabled={busyId === `confirm_deposit:${d.id}`}
+                        onClick={() => act("confirm_deposit", d.id)}
+                      >
+                        Approve (credit now)
+                      </Btn>
+                      <Btn
                         variant="danger"
                         disabled={busyId === `reject_deposit:${d.id}` || note(d.id).trim().length < 3}
                         onClick={() => act("reject_deposit", d.id)}
@@ -167,8 +221,18 @@ export function QueuesSection({ desk }: { desk: DeskApi }) {
       {kind === "withdrawals" && (
         <Card
           title="Pending withdrawals"
-          hint="Settle how you like: send the money yourself then Mark paid (manual), or Pay via Shashura — the API settles it automatically when the network confirms. Fail refunds the member; both paths settle against the external Shashura account."
+          hint="Settle how you like: send the money yourself then Mark paid (manual), or Pay via Shashura — the API settles it automatically when the network confirms. Reconcile re-polls every in-flight payout and settles any the callback missed. Fail refunds the member; both paths settle against the external Shashura account."
         >
+          <div className="mb-3 flex flex-wrap items-center gap-2">
+            <Btn
+              variant="ghost"
+              disabled={busyId === "reconcile:all"}
+              onClick={() => gateway("reconcile")}
+            >
+              {busyId === "reconcile:all" ? "Reconciling…" : "Reconcile queue (re-poll payouts)"}
+            </Btn>
+            {sweep ? <span className="text-[11px] text-[#92a0b9]">{sweep}</span> : null}
+          </div>
           {!withdrawals || withdrawals.length === 0 ? (
             <p className="text-sm text-[#92a0b9]">Queue is clear.</p>
           ) : (
@@ -242,6 +306,30 @@ export function QueuesSection({ desk }: { desk: DeskApi }) {
             </ul>
           )}
         </Card>
+      )}
+
+      {alert && alert.length > 0 && (
+        <AlertPopup
+          title={`${alert.length} failed deposit${alert.length > 1 ? "s" : ""}`}
+          hint="The gateway rejected these attempts — no money moved, so nothing settled. Reconcile or Check status to retry, or Reject to close them out. This popup fires only for genuine failures."
+          onClose={() => setAlert(null)}
+        >
+          {alert.map((d) => (
+            <div
+              key={d.id}
+              className="rounded-xl border border-[#20304a] bg-[#0c1626] p-2.5 text-xs"
+            >
+              <div className="flex items-baseline justify-between gap-2">
+                <span className="font-black tabular-nums">{fmtUGX(d.amount)}</span>
+                <span className="font-bold">{d.username ?? d.display_name ?? "member"}</span>
+              </div>
+              <div className="mt-0.5 text-[#92a0b9]">
+                {d.channel} from {d.payer_account} · {fmtDateTime(d.created_at)}
+                {d.gateway_detail ? ` · ${d.gateway_detail}` : ""}
+              </div>
+            </div>
+          ))}
+        </AlertPopup>
       )}
     </div>
   );

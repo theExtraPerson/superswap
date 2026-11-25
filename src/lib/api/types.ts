@@ -236,6 +236,9 @@ export interface AdminMetrics {
   fees_total: number | string;
   bonus_total: number | string;
   referral_commission_total: number | string;
+  /** Split view — absent on a DB that predates the commission-repair migration. */
+  referral_commission_l1?: number | string;
+  referral_commission_l2?: number | string;
   yield_paid_total: number | string;
 }
 
@@ -297,6 +300,10 @@ export interface AdminQueueDepositRow extends DepositRow {
   gateway_tid?: string | null;
   gateway_state?: DepositGatewayState;
   gateway_detail?: string | null;
+  /** Minutes since the member opened it (reconciliation age). */
+  waiting_minutes?: number;
+  /** Server-side alert rule: failed attempt, amount mismatch or stale webhook. */
+  needs_action?: boolean;
 }
 
 export interface AdminQueueWithdrawalRow extends WithdrawalRow {

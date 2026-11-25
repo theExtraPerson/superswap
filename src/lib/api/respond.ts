@@ -51,10 +51,15 @@ export async function callRpc<T>(
   if (error) {
     // Postgres text is worded for operators and, when it is not a named
     // 'CODE: detail', mapRpcError collapses it to a causeless 500. Keep the raw
-    // message in the server log so the real fault is recoverable (same [tag]
-    // convention as logAuthFailure); the client still gets the safe envelope.
-    const failure = mapRpcError(error.message);
-    console.error(`[rpc-fail] ${fn} ${failure.code}/${failure.status} :: ${error.message}`);
+    // message AND the SQLSTATE in the server log so the real fault is recoverable
+    // (same [tag] convention as logAuthFailure); the client still gets the safe
+    // envelope. A DDL-level SQLSTATE (42883/42703/42P01/42P10/23514…) means the
+    // database is behind the code — the settlement outage of 2026-11-25 was
+    // exactly that and only the SQLSTATE made it findable.
+    const failure = mapRpcError(error.message, error.code);
+    console.error(
+      `[rpc-fail] ${fn} ${failure.code}/${failure.status} sqlstate=${error.code ?? "?"} :: ${error.message}`
+    );
     return fail(failure.status, failure.code, failure.message);
   }
   return ok<T>(data as T);

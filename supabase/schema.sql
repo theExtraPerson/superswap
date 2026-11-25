@@ -12,9 +12,13 @@
 create extension if not exists pgcrypto;
 
 -- Idempotency helper (payment events, client-generated keys).
+-- Postgres' built-in sha256() (PG11+), NOT pgcrypto's digest(): this function is
+-- called from inside SECURITY DEFINER cores that pin `search_path = public`, and
+-- Supabase installs pgcrypto in the `extensions` schema. digest() would then be
+-- unresolvable (42883) and every settlement would die on its own audit insert.
 create or replace function app_hash_sha256(p_text text) returns text
-language sql immutable
-as $$ select encode(digest(coalesce(p_text, ''), 'sha256'), 'hex') $$;
+language sql immutable set search_path = public
+as $$ select encode(sha256(convert_to(coalesce(p_text, ''), 'UTF8')), 'hex') $$;
 
 -- ----------------------------------------------------------------------------
 -- 0. Drop legacy simulator objects (no live data before launch)
